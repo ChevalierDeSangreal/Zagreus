@@ -1,0 +1,13 @@
+*.pyc
+runs/
+*.npz
+# *.pt
+*.png
+*.tfevents*
+*.egg-info/
+past_param_saved/
+test_runs/
+*/__pycache__/
+Kephale/scripts/camera_output
+# param/
+*.out
