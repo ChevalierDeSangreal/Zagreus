@@ -22,11 +22,11 @@ from isaacgym import gymtorch, gymapi
 from isaacgym.torch_utils import *
 from .base_task import BaseTask
 from .track_agile_config import TrackAgileCfg
-from Kephale.utils.helpers import asset_class_to_AssetOptions
-from Kephale.utils.mymath import rand_circle_point
+from Zagreus.utils.helpers import asset_class_to_AssetOptions
+from Zagreus.utils.mymath import rand_circle_point
 from .dynamics_isaac import IsaacGymDynamics
 import torch.nn.functional as F
-from Kephale.config import ROOT_DIR
+from Zagreus.config import ROOT_DIR
 
 class TrackAgileVer2(BaseTask):
 
@@ -103,7 +103,7 @@ class TrackAgileVer2(BaseTask):
             self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
 
         # # init dataset
-        # self.tar_traj_dataset = TargetDataset('/home/wangzimo/VTT/VTT/Kephale/data', self.device)
+        # self.tar_traj_dataset = TargetDataset('/home/wangzimo/VTT/VTT/Zagreus/data', self.device)
         # self.tar_traj_dataloader = DataLoader(self.tar_traj_dataset, batch_size=self.num_envs, shuffle=True)
         # self.tar_traj_iter = itertools.cycle(self.tar_traj_dataloader)
         # self.tar_traj = next(self.tar_traj_iter)
@@ -533,12 +533,12 @@ class TrackAgileVer2(BaseTask):
         # print(tmp_camera_dep_root_tensors.device)
         return tmp_camera_dep_root_tensors, tmp_camera_seg_root_tensors
 
-    def save_camera_output(self, file_name="tmp.png", file_path="/home/wangzimo/VTT/VTT/Kephale/scripts/camera_output/frames/", idx=0):
+    def save_camera_output(self, file_name="tmp.png", file_path="/home/wangzimo/VTT/VTT/Zagreus/scripts/camera_output/frames/", idx=0):
         filepath = file_path + file_name
         self.gym.write_camera_image_to_file(self.sim, self.envs[idx], self.camera_handles[idx], gymapi.IMAGE_COLOR, filepath)
         return self.gym.get_camera_image(self.sim, self.envs[idx], self.camera_handles[idx], gymapi.IMAGE_COLOR)
     
-    def save_camera2_output(self, file_name="tmp.png", file_path="/home/wangzimo/VTT/VTT/Kephale/scripts/camera_output/frames/", idx=0):
+    def save_camera2_output(self, file_name="tmp.png", file_path="/home/wangzimo/VTT/VTT/Zagreus/scripts/camera_output/frames/", idx=0):
         filepath = file_path + file_name
         self.gym.write_camera_image_to_file(self.sim, self.envs[idx], self.camera2_handles[idx], gymapi.IMAGE_COLOR, filepath)
         return self.gym.get_camera_image(self.sim, self.envs[idx], self.camera2_handles[idx], gymapi.IMAGE_COLOR)

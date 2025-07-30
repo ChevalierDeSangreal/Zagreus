@@ -17,14 +17,14 @@ import pytz
 from datetime import datetime
 import sys
 
-from Kephale.config import ROOT_DIR
+from Zagreus.config import ROOT_DIR
 # sys.path.append(ROOT_DIR)
 
 # print(sys.path)
-from Kephale.envs import *
-from Kephale.utils import velh_lossVer5, agile_lossVer1, AgileLoss, agile_lossVer4, agile_lossVer6
-from Kephale.models import TrackTransferModuleVer0
-from Kephale.envs import IsaacGymDynamics, NewtonDynamics, IsaacGymOriDynamics, NRIsaacGymDynamics
+from Zagreus.envs import *
+from Zagreus.utils import velh_lossVer5, agile_lossVer1, AgileLoss, agile_lossVer4, agile_lossVer6
+from Zagreus.models import TrackTransferModuleVer0
+from Zagreus.envs import IsaacGymDynamics, NewtonDynamics, IsaacGymOriDynamics, NRIsaacGymDynamics
 # os.path.basename(__file__).rstrip(".py")
 
 
@@ -138,7 +138,7 @@ if __name__ == "__main__":
 	# model.load_model(param_load_path)
 	# tmp_model.load_model(param_load_path)
 	# model.directpred.load_state_dict(tmp_model.directpred.state_dict())
-	# model.extractor_module.load_state_dict(torch.load('/home/wangzimo/VTT/VTT/Kephale/param_saved/track_agileVer7.pth', map_location=device))
+	# model.extractor_module.load_state_dict(torch.load('/home/wangzimo/VTT/VTT/Zagreus/param_saved/track_agileVer7.pth', map_location=device))
 
 	for name, param in model.named_parameters():
 		if ("extractor_module" in name) or ("directpred" in name):
@@ -327,7 +327,7 @@ if __name__ == "__main__":
 		# 	all_embeddings_tensor = torch.cat(all_embeddings, dim=0)  # shape: (N, embedding_dim)
 		# 	all_states_tensor = torch.cat(all_states, dim=0)
 		# 	save_path = os.path.join(data_path, f"{epoch}.pt")
-		# 	# save_path = f"/home/core/wangzimo/VTT/VTT/Kephale/data/{epoch}.pt"
+		# 	# save_path = f"/home/core/wangzimo/VTT/VTT/Zagreus/data/{epoch}.pt"
 		# 	print(f"Saving embeddings and states to {save_path}...")
 		# 	torch.save({
 		# 		'embeddings': all_embeddings_tensor,

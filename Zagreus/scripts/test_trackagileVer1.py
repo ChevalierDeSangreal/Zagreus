@@ -20,14 +20,14 @@ import pytz
 from datetime import datetime
 import sys
 
-from Kephale.config import ROOT_DIR
+from Zagreus.config import ROOT_DIR
 # sys.path.append(ROOT_DIR)
 
 # print(sys.path)
-from Kephale.envs import *
-from Kephale.utils import velh_lossVer5, agile_lossVer1, AgileLoss, agile_lossVer6
-from Kephale.models import TrackTransferModuleVer0, TrackAgileModuleVer4
-from Kephale.envs import IsaacGymDynamics, NewtonDynamics, IsaacGymOriDynamics, NRIsaacGymDynamics
+from Zagreus.envs import *
+from Zagreus.utils import velh_lossVer5, agile_lossVer1, AgileLoss, agile_lossVer6
+from Zagreus.models import TrackTransferModuleVer0, TrackAgileModuleVer4
+from Zagreus.envs import IsaacGymDynamics, NewtonDynamics, IsaacGymOriDynamics, NRIsaacGymDynamics
 # os.path.basename(__file__).rstrip(".py")
 
 

@@ -7,7 +7,7 @@
 from .base_config import BaseConfig
 
 import numpy as np
-from Kephale.config import ROOT_DIR
+from Zagreus.config import ROOT_DIR
 
 class TrackAgileCfg(BaseConfig):
     seed = 42

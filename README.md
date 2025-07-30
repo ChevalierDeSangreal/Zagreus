@@ -2,8 +2,8 @@
 ## Run
 要运行文件，在项目根目录上级目录下运行指令：
 ```
-python -m Kephale.scripts.train_tracktransferVer2
-python -m Kephale.scripts.test_trackagileVer1
+python -m Zagreus.scripts.train_tracktransferVer2
+python -m Zagreus.scripts.test_trackagileVer1
 ```
 ## Debug
 安装环境后遇到报错：
