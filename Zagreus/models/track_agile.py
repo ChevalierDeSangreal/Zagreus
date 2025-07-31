@@ -4,6 +4,7 @@ import torch
 import torchvision.models as models
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
+from Zagreus.models.track_transfer import TrackTransferModuleVer0Predict
 
 class TrackAgileModuleVer0(nn.Module):
     """
@@ -341,6 +342,51 @@ class TrackAgileModuleVer8(nn.Module):
         self.extractor_module = TrackAgileModuleVer2ExtractorVer2(device=device).to(device)
 
         self.directpred = DirectionPrediction(device=device).to(device)
+
+    def save_model(self, path):
+        """Save the model's state dictionary to the specified path."""
+        torch.save(self.state_dict(), path)
+
+    def load_model(self, path):
+        """Load the model's state dictionary from the specified path."""
+        self.load_state_dict(torch.load(path, map_location=self.device))
+
+    def set_eval_mode(self):
+        """Set the model to evaluation mode."""
+        self.eval()
+
+class TrackAgileModuleVer4Dicision(nn.Module):
+    def __init__(self, input_size=9+9, hidden_size=256, output_size=4, num_layers=2, seq_len=10, device='cpu'):
+        super(TrackAgileModuleVer4Dicision, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.seq_len = seq_len
+        self.gru = nn.GRU(input_size, hidden_size, num_layers).to(device)
+        self.fc = nn.Linear(hidden_size, seq_len * output_size).to(device)
+        torch.nn.init.kaiming_normal_(self.fc.weight)
+
+    def forward(self, x):
+        h0 = torch.zeros(self.num_layers, x.shape[1], self.hidden_size).to(x[0].device)
+        embedding, _ = self.gru(x, h0)
+        out = self.fc(embedding[-1, :, :])
+        out = out.view(x.shape[1], self.seq_len, -1)
+        return out, embedding[-1, :, :]
+    
+
+class TrackAgileModuleVer9(nn.Module):
+    """
+    Based on ver2
+    Action output will be in range [0, 1]
+    Do not use av as input
+    """
+    def __init__(self, device='cpu'):
+        super(TrackAgileModuleVer9, self).__init__()
+        self.device = device
+
+        # Initialize Decision module
+        self.decision_module = TrackAgileModuleVer4Dicision(input_size=6+3,device=device).to(device)
+
+        self.predict_module = TrackTransferModuleVer0Predict(device=device).to(device)
 
     def save_model(self, path):
         """Save the model's state dictionary to the specified path."""

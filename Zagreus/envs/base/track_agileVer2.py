@@ -358,7 +358,7 @@ class TrackAgileVer2(BaseTask):
             # self.tar_root_states[idx, 0:3] = self.tar_traj[idx, self.count_step[idx], :3]
         # print(self.tar_traj.shape)
         # print(self.tar_traj.shape)
-        self.tar_root_states[env_ids, 0] = 3
+        self.tar_root_states[env_ids, 0] = 1
         self.tar_root_states[env_ids, 1] = 0
         # self.tar_root_states[env_ids, 0:3] = 0
         self.tar_root_states[env_ids, 2] = 7
