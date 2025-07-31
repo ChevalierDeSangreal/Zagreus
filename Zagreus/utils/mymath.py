@@ -7,6 +7,8 @@
 import torch
 import numpy as np
 from torch import Tensor
+from pytorch3d.transforms import quaternion_to_matrix, matrix_to_euler_angles, euler_angles_to_matrix, matrix_to_quaternion, axis_angle_to_matrix
+
 
 @torch.jit.script
 def compute_vee_map(skew_matrix):
@@ -40,3 +42,8 @@ def set_circle_point(batch_size, r, device, thetas):
 
 # if __name__ == "__main__":
 #     print(rand_circle_point(2, 5, 'cuda:0'))
+
+def euler2qua(euler):
+	rotation_matrices = euler_angles_to_matrix(euler, "ZYX")
+	qua = matrix_to_quaternion(rotation_matrices)[:, [3, 2, 1, 0]]
+	return qua

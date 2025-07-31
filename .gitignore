@@ -8,6 +8,6 @@ runs/
 past_param_saved/
 test_runs/
 */__pycache__/
-Kephale/scripts/camera_output
+Zagreus/scripts/camera_output
 # param/
 *.out

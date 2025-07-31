@@ -6,9 +6,9 @@
 
 import torch
 
-from Kephale.envs.controllers.attitude_control import LeeAttitudeContoller
-from Kephale.envs.controllers.position_control import LeePositionController
-from Kephale.envs.controllers.velocity_control import LeeVelocityController
+from Zagreus.envs.controllers.attitude_control import LeeAttitudeContoller
+from Zagreus.envs.controllers.position_control import LeePositionController
+from Zagreus.envs.controllers.velocity_control import LeeVelocityController
 
 
 control_class_dict = {

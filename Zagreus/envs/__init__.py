@@ -10,7 +10,7 @@ from .base.dynamics_simple import SimpleDynamics, NRSimpleDynamics
 from .base.dynamics_isaac_origin import IsaacGymOriDynamics
 from .base.track_agileVer2 import TrackAgileVer2
 from .base.track_agile_config import TrackAgileCfg
-from Kephale.utils.task_registry import task_registry
+from Zagreus.utils.task_registry import task_registry
 
 # task_registry.register( "quad", AerialRobot, AerialRobotCfg())
 # task_registry.register("quad_with_obstacles", AerialRobotWithObstacles, AerialRobotWithObstaclesCfg())
