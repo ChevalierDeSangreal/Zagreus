@@ -6,6 +6,7 @@ python -m Zagreus.scripts.train_tracktransferVer2
 python -m Zagreus.scripts.test_trackagileVer1
 python -m Zagreus.scripts.test_trackagileVer1_onboard
 python -m Zagreus.scripts.train_trackagileVer2
+python -m Zagreus.scripts.train_trackagileVer3
 ```
 
 ```

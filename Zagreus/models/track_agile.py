@@ -399,3 +399,247 @@ class TrackAgileModuleVer9(nn.Module):
     def set_eval_mode(self):
         """Set the model to evaluation mode."""
         self.eval()
+
+class TrackAgileModuleVer10Extractor(nn.Module):
+    def __init__(self,
+                 in_channels_prev=2,
+                 in_channels_curr=1,
+                 hidden_dim=16*16,     # token 特征维度，现在等于 16x16
+                 cnn_feats=8,       # token 数量
+                 num_heads=8,
+                 mlp_dim=64):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.cnn_feats = cnn_feats
+
+        # CNN for previous inputs (depth + seg)
+        self.backbone_prev = nn.Sequential(
+            nn.Conv2d(in_channels_prev, 16, kernel_size=7, stride=2, padding=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, cnn_feats, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True)
+        )  # -> (B, cnn_feats, 56, 56)
+        self.pool_prev = nn.AdaptiveAvgPool2d((16, 16))  # -> (B, cnn_feats, 16, 16)
+
+        # CNN for current depth
+        self.backbone_curr = nn.Sequential(
+            nn.Conv2d(in_channels_curr, 16, kernel_size=7, stride=2, padding=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, cnn_feats, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True)
+        )
+        self.pool_curr = nn.AdaptiveAvgPool2d((16, 16))
+
+        # Attention modules
+        self.encoder_attn = nn.MultiheadAttention(embed_dim=hidden_dim,
+                                                  num_heads=num_heads,
+                                                  batch_first=True)
+        self.decoder_attn = nn.MultiheadAttention(embed_dim=hidden_dim,
+                                                  num_heads=num_heads,
+                                                  batch_first=True)
+
+        # LayerNorm for token embedding (optional)
+        self.ln_tokens = nn.LayerNorm(hidden_dim)
+
+        # MLP head
+        self.mlp_out = nn.Sequential(
+            nn.Linear(cnn_feats * hidden_dim, mlp_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(mlp_dim, mlp_dim)
+        )
+
+        # Regressor
+        self.regressor = nn.Sequential(
+            nn.Linear(mlp_dim, mlp_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(mlp_dim, 3)
+        )
+
+        # Segmentation head
+        self.seg_head = nn.Sequential(
+            nn.Linear(mlp_dim, cnn_feats * 16 * 16),
+            nn.ReLU(inplace=True)
+        )
+        self.up_conv = nn.Sequential(
+            nn.ConvTranspose2d(cnn_feats, 16, kernel_size=4, stride=2, padding=1),  # (16,16)→(32,32)
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(16, 1, kernel_size=4, stride=2, padding=1),         # (32,32)→(64,64)
+            nn.Upsample(size=(223, 223), mode='bilinear', align_corners=False)     # (64,64)→(223,223)
+        )
+
+    def forward(self, d_prev, s_prev, d_curr):
+        B = d_prev.shape[0]
+        d_prev = d_prev.unsqueeze(1)
+        s_prev = s_prev.unsqueeze(1)
+        d_curr = d_curr.unsqueeze(1)
+
+        ### ---- Encoder path ----
+        x_prev = torch.cat([d_prev, s_prev], dim=1)  # (B,2,223,223)
+        feat_prev = self.backbone_prev(x_prev)       # (B,32,56,56)
+        feat_prev = self.pool_prev(feat_prev)        # (B,8,16,16)
+
+        # Flatten spatial dims: (B, C, H, W) → (B, C, H*W) → tokens
+        enc_tokens = feat_prev.view(B, self.cnn_feats, -1)  # (B, 8, 256)
+        enc_tokens = self.ln_tokens(enc_tokens)             # (B, 8, 256)
+
+        # Self-attention on encoder tokens
+        enc_out, _ = self.encoder_attn(enc_tokens, enc_tokens, enc_tokens)  # (B, 8, 256)
+
+        ### ---- Decoder path ----
+        feat_curr = self.backbone_curr(d_curr)              # (B,8,56,56)
+        feat_curr = self.pool_curr(feat_curr)               # (B,8,16,16)
+        dec_tokens = feat_curr.view(B, self.cnn_feats, -1)  # (B,8,256)
+        dec_tokens = self.ln_tokens(dec_tokens)             # (B,8,256)
+
+        # Cross-attention: decoder tokens attend to encoder outputs
+        dec_out, _ = self.decoder_attn(dec_tokens, enc_out, enc_out)  # (B, 8, 256)
+
+        # print(dec_out.shape)
+        ### ---- Output path ----
+        dec_out_flat = dec_out.reshape(B, -1)                  # (B, 8*256)
+        output_feature = self.mlp_out(dec_out_flat)         # (B, mlp_dim)
+
+        rel_dist = self.regressor(output_feature)           # (B,3)
+
+        seg_feat = self.seg_head(output_feature)            # (B, cnn_feats*16*16)
+        
+        seg_feat = seg_feat.view(B, self.cnn_feats, 16, 16) # (B,8,16,16)
+        s_t = self.up_conv(seg_feat)                        # (B,1,223,223)
+        s_t = s_t.squeeze(1)
+
+        return {
+            'rel_dist': rel_dist, # (B, 3)
+            'segmentation': s_t, # (B, 223, 223)
+            'feature': output_feature # (B, mlp_dim)
+        }
+    
+    # def forward(self, d_prev, s_prev, d_curr):
+    #     print("!!")
+    #     B = d_prev.shape[0]
+    #     d_prev = d_prev.unsqueeze(1)
+    #     s_prev = s_prev.unsqueeze(1)
+    #     d_curr = d_curr.unsqueeze(1)
+
+    #     ### ---- Encoder path ----
+    #     x_prev = torch.cat([d_prev, s_prev], dim=1)  # (B,2,223,223)
+    #     if torch.isnan(x_prev).any():
+    #         print("NaN detected in x_prev after concatenation")
+    #         exit(0)
+    #     if torch.isinf(x_prev).any():
+    #         print("Inf detected in x_prev after concatenation")
+    #         exit(0)
+    #     for name, param in self.backbone_prev.named_parameters():
+    #         if torch.isnan(param).any() or torch.isinf(param).any():
+    #             print(f"NaN or Inf detected in weight: {name}")
+    #     # print(f"x_prev min: {x_prev.min().item():.6f}, max: {x_prev.max().item():.6f}")
+
+    #     feat_prev = self.backbone_prev(x_prev)       # (B,32,56,56)
+    #     if torch.isnan(feat_prev).any():
+    #         print("NaN detected in feat_prev after backbone_prev")
+    #         exit(0)
+
+    #     feat_prev = self.pool_prev(feat_prev)        # (B,8,16,16)
+    #     if torch.isnan(feat_prev).any():
+    #         print("NaN detected in feat_prev after pool_prev")
+    #         exit(0)
+
+    #     enc_tokens = feat_prev.view(B, self.cnn_feats, -1)  # (B, 8, 256)
+    #     enc_tokens = self.ln_tokens(enc_tokens)             # (B, 8, 256)
+    #     if torch.isnan(enc_tokens).any():
+    #         print("NaN detected in enc_tokens after layer norm")
+    #         exit(0)
+
+    #     enc_out, _ = self.encoder_attn(enc_tokens, enc_tokens, enc_tokens)  # (B, 8, 256)
+    #     if torch.isnan(enc_out).any():
+    #         print("NaN detected in enc_out after encoder attention")
+    #         exit(0)
+
+    #     ### ---- Decoder path ----
+    #     feat_curr = self.backbone_curr(d_curr)              # (B,8,56,56)
+    #     if torch.isnan(feat_curr).any():
+    #         print("NaN detected in feat_curr after backbone_curr")
+    #         exit(0)
+
+    #     feat_curr = self.pool_curr(feat_curr)               # (B,8,16,16)
+    #     if torch.isnan(feat_curr).any():
+    #         print("NaN detected in feat_curr after pool_curr")
+    #         exit(0)
+
+    #     dec_tokens = feat_curr.view(B, self.cnn_feats, -1)  # (B,8,256)
+    #     dec_tokens = self.ln_tokens(dec_tokens)             # (B,8,256)
+    #     if torch.isnan(dec_tokens).any():
+    #         print("NaN detected in dec_tokens after layer norm")
+    #         exit(0)
+
+    #     dec_out, _ = self.decoder_attn(dec_tokens, enc_out, enc_out)  # (B, 8, 256)
+    #     if torch.isnan(dec_out).any():
+    #         print("NaN detected in dec_out after decoder attention")
+    #         exit(0)
+
+    #     ### ---- Output path ----
+    #     dec_out_flat = dec_out.reshape(B, -1)                  # (B, 8*256)
+    #     if torch.isnan(dec_out_flat).any():
+    #         print("NaN detected in dec_out_flat after flatten")
+    #         exit(0)
+
+    #     output_feature = self.mlp_out(dec_out_flat)         # (B, mlp_dim)
+    #     if torch.isnan(output_feature).any():
+    #         print("NaN detected in output_feature after mlp_out")
+    #         exit(0)
+
+    #     rel_dist = self.regressor(output_feature)           # (B,3)
+    #     if torch.isnan(rel_dist).any():
+    #         print("NaN detected in rel_dist")
+    #         exit(0)
+
+    #     seg_feat = self.seg_head(output_feature)            # (B, cnn_feats*16*16)
+    #     if torch.isnan(seg_feat).any():
+    #         print("NaN detected in seg_feat after seg_head")
+    #         exit(0)
+
+    #     seg_feat = seg_feat.view(B, self.cnn_feats, 16, 16) # (B,8,16,16)
+    #     s_t = self.up_conv(seg_feat)                        # (B,1,223,223)
+    #     if torch.isnan(s_t).any():
+    #         print("NaN detected in s_t after up_conv")
+    #         exit(0)
+
+    #     s_t = s_t.squeeze(1)
+    #     if torch.isnan(s_t).any():
+    #         print("NaN detected in s_t after squeeze")
+    #         exit(0)
+
+    #     return {
+    #         'rel_dist': rel_dist,             # (B, 3)
+    #         'segmentation': s_t,              # (B, 223, 223)
+    #         'feature': output_feature         # (B, mlp_dim)
+    #     }
+
+
+
+class TrackAgileModuleVer10(nn.Module):
+    """
+    Based on ver9
+    Added extractor module
+    """
+    def __init__(self, device='cpu'):
+        super(TrackAgileModuleVer10, self).__init__()
+        self.device = device
+
+        # Initialize Decision module
+        self.decision_module = TrackAgileModuleVer4Dicision(input_size=6+64,device=device).to(device)
+
+        self.predict_module = TrackTransferModuleVer0Predict(device=device).to(device)
+
+        self.extractor_module = TrackAgileModuleVer10Extractor().to(device)
+
+    def save_model(self, path):
+        """Save the model's state dictionary to the specified path."""
+        torch.save(self.state_dict(), path)
+
+    def load_model(self, path):
+        """Load the model's state dictionary from the specified path."""
+        self.load_state_dict(torch.load(path, map_location=self.device))
+
+    def set_eval_mode(self):
+        """Set the model to evaluation mode."""
+        self.eval()

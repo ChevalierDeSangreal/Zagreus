@@ -5,7 +5,6 @@
 # LICENSE file in the root directory of this source tree.
 """ 
     Modified based on track_agileVer1.py
-    Using image as input
     $$$ By now a moving target is set
     $$$ Two place to change from 12 to 13
 """
@@ -236,8 +235,8 @@ class TrackAgileVer2(BaseTask):
             # print("??????: 2")
             # Create Cemara
             camera_properties = gymapi.CameraProperties()
-            camera_properties.width = 224
-            camera_properties.height = 224
+            camera_properties.width = 223
+            camera_properties.height = 223
             camera_properties.enable_tensors = True
 
 
@@ -358,7 +357,7 @@ class TrackAgileVer2(BaseTask):
             # self.tar_root_states[idx, 0:3] = self.tar_traj[idx, self.count_step[idx], :3]
         # print(self.tar_traj.shape)
         # print(self.tar_traj.shape)
-        self.tar_root_states[env_ids, 0] = 1
+        self.tar_root_states[env_ids, 0] = 3
         self.tar_root_states[env_ids, 1] = 0
         # self.tar_root_states[env_ids, 0:3] = 0
         self.tar_root_states[env_ids, 2] = 7

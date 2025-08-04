@@ -21,24 +21,25 @@ from Zagreus.config import ROOT_DIR
 # sys.path.append(ROOT_DIR)
 
 # print(sys.path)
-from Zagreus.utils import AgileLoss, agile_lossVer4, agile_lossVer6
+from Zagreus.utils import AgileLoss, agile_lossVer4, agile_lossVer7
 from Zagreus.models import TrackAgileModuleVer9
 from Zagreus.envs import IrisDynamics, task_registry
 # os.path.basename(__file__).rstrip(".py")
 
 
 """
-Based on trackagileVer1
-Use new dynamics, closer to px4 + gazebo simulation
-Do not give av as input
-
+Based on trackagileVer2
+using environment track_agileVer3
+Changed desired height to height of target
+Changed target distance from 2m to 1m
+using agile_lossVer7 which improved direction loss
 """
 
 
 def get_args():
 	custom_parameters = [
 		{"name": "--task", "type": str, "default": "track_agileVer2", "help": "The name of the task."},
-		{"name": "--experiment_name", "type": str, "default": "track_agileVer2", "help": "Name of the experiment to run or load."},
+		{"name": "--experiment_name", "type": str, "default": "track_agileVer4", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
 		{"name": "--num_envs", "type": int, "default": 64, "help": "Number of environments to create. Batch size will be equal to this"},
@@ -64,9 +65,9 @@ def get_args():
 			"help": "learning rate will decrease every step_size steps"},
 
 		# model setting
-		{"name": "--param_save_name", "type":str, "default": 'track_agileVer2.pth',
+		{"name": "--param_save_name", "type":str, "default": 'track_agileVer4.pth',
 			"help": "The path to model parameters"},
-		{"name": "--param_load_path", "type":str, "default": 'track_agileVer2.pth',
+		{"name": "--param_load_path", "type":str, "default": 'track_agileVer4.pth',
 			"help": "The path to model parameters"},
 		
 		]
@@ -136,7 +137,7 @@ if __name__ == "__main__":
 	# tmp_model = TrackAgileModuleVer3(device=device).to(device)
 	model = TrackAgileModuleVer9(device=device).to(device)
 
-	model.load_model(param_load_path)
+	# model.load_model(param_load_path)
 	# tmp_model.load_model(param_load_path)
 	# model.directpred.load_state_dict(tmp_model.directpred.state_dict())
 	# model.extractor_module.load_state_dict(torch.load('/home/wangzimo/VTT/VTT/Zagreus/param_saved/track_agileVer7.pth', map_location=device))
@@ -231,7 +232,7 @@ if __name__ == "__main__":
 				# 		print(f"predict_res[{i}]:", predict_res[0, i, :])
 				# 	exit(0)
 				loss_pred = loss_pred.clone() + criterion(predict_buffer.clone(), predict_res).mean(dim=(1, 2))
-
+				# print(loss_pred.shape)
 			# action: [batch_size, 10, 4]
 			action = action_seq[:, step % 10, :].clone()
 			
@@ -247,7 +248,7 @@ if __name__ == "__main__":
 			input_buffer[:, reset_idx] = 0
 
 			# loss_agile, new_loss = agile_lossVer4(old_loss, now_quad_state, tar_state, 7, tar_ori, 2, timer, envs.cfg.sim.dt, init_vec)
-			loss_agile, new_loss = agile_lossVer6(old_loss, now_quad_state, tar_state, 7, tar_ori, 2, timer, envs.cfg.sim.dt, init_vec, action, last_action)
+			loss_agile, new_loss = agile_lossVer7(old_loss, now_quad_state, tar_state, tar_state[:, 2].clone(), tar_ori, 2, timer, envs.cfg.sim.dt, init_vec, action, last_action)
 			old_loss = new_loss
 			
 			
@@ -260,18 +261,9 @@ if __name__ == "__main__":
 
 			if (not (step + 1) % 50):
 				
-				# print(action[0])
-				# print("Loss:", loss[0])
-				# print("shape of predict buffer:", predict_buffer.shape)
-				# print("Shape of predict res:", predict_res.shape)
-				# loss_pred = criterion(predict_buffer, predict_res).mean(dim=(1, 2))
-				# print("Loss pred shape:", loss_pred.shape)
-				# print("Loss agile shape:", loss_agile.shape)
-				# print("predict res:", predict_res[0, 9, :])
-				# print("predict buffer:", predict_buffer[0, 9, :])
-				# exit(0)
 				
 				loss = 0.1 * loss_pred + 0.9 * loss_agile
+				# print(loss.shape, not_reset_buf.shape, loss_agile.shape)
 				loss.backward(not_reset_buf)
 				optimizer.step()
 				optimizer.zero_grad()

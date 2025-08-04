@@ -22,32 +22,30 @@ from Zagreus.config import ROOT_DIR
 
 # print(sys.path)
 from Zagreus.utils import AgileLoss, agile_lossVer4, agile_lossVer6
-from Zagreus.models import TrackAgileModuleVer9
+from Zagreus.models import TrackAgileModuleVer9, TrackAgileModuleVer10
 from Zagreus.envs import IrisDynamics, task_registry
 # os.path.basename(__file__).rstrip(".py")
 
 
 """
-Based on trackagileVer1
-Use new dynamics, closer to px4 + gazebo simulation
-Do not give av as input
-
+Based on trackagileVer2
+In order to pretrain extractor module
 """
 
 
 def get_args():
 	custom_parameters = [
 		{"name": "--task", "type": str, "default": "track_agileVer2", "help": "The name of the task."},
-		{"name": "--experiment_name", "type": str, "default": "track_agileVer2", "help": "Name of the experiment to run or load."},
+		{"name": "--experiment_name", "type": str, "default": "track_agileVer3", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
-		{"name": "--num_envs", "type": int, "default": 64, "help": "Number of environments to create. Batch size will be equal to this"},
+		{"name": "--num_envs", "type": int, "default": 2, "help": "Number of environments to create. Batch size will be equal to this"},
 		{"name": "--seed", "type": int, "default": 42, "help": "Random seed. Overrides config file if provided."},
 
 		# train setting
-		{"name": "--learning_rate", "type":float, "default": 1.6e-4,
+		{"name": "--learning_rate", "type":float, "default": 1.6e-5,
 			"help": "the learning rate of the optimizer"},
-		{"name": "--batch_size", "type":int, "default": 64,
+		{"name": "--batch_size", "type":int, "default": 2,
 			"help": "batch size of training. Notice that batch_size should be equal to num_envs"},
 		{"name": "--num_worker", "type":int, "default": 4,
 			"help": "num worker of dataloader"},
@@ -64,7 +62,7 @@ def get_args():
 			"help": "learning rate will decrease every step_size steps"},
 
 		# model setting
-		{"name": "--param_save_name", "type":str, "default": 'track_agileVer2.pth',
+		{"name": "--param_save_name", "type":str, "default": 'track_agileVer3.pth',
 			"help": "The path to model parameters"},
 		{"name": "--param_load_path", "type":str, "default": 'track_agileVer2.pth',
 			"help": "The path to model parameters"},
@@ -101,6 +99,28 @@ def get_time():
 
 	return formatted_time_local
 
+def visualize_depth_image(image):
+    image_save_path = os.path.join(ROOT_DIR, 'output', "depth_image_batch0.png")
+
+    plt.figure(figsize=(6, 6))
+    im = plt.imshow(image, cmap='plasma', vmin=np.min(image), vmax=np.max(image))
+    plt.title("Depth Image (Heatmap Style)")
+    plt.axis('off')
+    plt.colorbar(im, fraction=0.046, pad=0.04, label='Depth Value')
+    plt.savefig(image_save_path, bbox_inches='tight', pad_inches=0)
+    plt.close()
+
+def visualize_seg_image(image):
+    image_save_path = os.path.join(ROOT_DIR, 'output', "seg_image_batch0.png")
+
+    plt.figure(figsize=(6, 6))
+    im = plt.imshow(image, cmap='nipy_spectral', interpolation='nearest')
+    plt.title("Segmentation Image (Heatmap Style)")
+    plt.axis('off')
+    plt.colorbar(im, fraction=0.046, pad=0.04, label='Class Index')
+    plt.savefig(image_save_path, bbox_inches='tight', pad_inches=0)
+    plt.close()
+
 if __name__ == "__main__":
 	# torch.autograd.set_detect_anomaly(True)
 	args = get_args()
@@ -135,19 +155,16 @@ if __name__ == "__main__":
 
 	# tmp_model = TrackAgileModuleVer3(device=device).to(device)
 	model = TrackAgileModuleVer9(device=device).to(device)
+	vision_model = TrackAgileModuleVer10(device=device).to(device)
 
 	model.load_model(param_load_path)
 	# tmp_model.load_model(param_load_path)
 	# model.directpred.load_state_dict(tmp_model.directpred.state_dict())
 	# model.extractor_module.load_state_dict(torch.load('/home/wangzimo/VTT/VTT/Zagreus/param_saved/track_agileVer7.pth', map_location=device))
 
-	for name, param in model.named_parameters():
-		if ("extractor_module" in name) or ("directpred" in name):
-			param.requires_grad = False
-
 
 	# optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-5)
-	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-5)
+	optimizer = optim.Adam(vision_model.parameters(), lr=args.learning_rate, eps=1e-5)
 	criterion = nn.MSELoss(reduction='none')
 	# scheduler = lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
 
@@ -160,7 +177,6 @@ if __name__ == "__main__":
 	all_embeddings = []
 	all_states = []
 	
-
 	for epoch in range(args.num_epoch):
 		
 		print(f"Epoch {epoch} begin...")
@@ -168,6 +184,7 @@ if __name__ == "__main__":
 		embedding_recording_enabled = True
 		old_loss = AgileLoss(args.batch_size, device=device)
 		loss_pred = torch.tensor(0.0)
+		loss_vision = torch.tensor(0.0)
 		optimizer.zero_grad()
 		
 		timer = torch.zeros((args.batch_size,), device=device)
@@ -175,6 +192,8 @@ if __name__ == "__main__":
 		input_buffer = torch.zeros(args.slide_size, args.batch_size, 6+3).to(device)
 		predict_buffer = torch.zeros(args.batch_size, 10, 9).to(device)
 		last_action = None
+		last_dep_image = None
+		last_seg_image = None
 
 		reset_buf = None
 		now_quad_state = envs.reset(reset_buf=reset_buf).detach()
@@ -222,14 +241,6 @@ if __name__ == "__main__":
 			predict_buffer[:, idx_predict, 6:9] = now_quad_state[:, 3:6].detach()
 
 			if not (step + 1) % 10:
-
-				# if step:
-				# 	print("Embedding shape:", embedding.shape)
-				# 	print(embedding[0, :])
-				# 	for i in range(10):
-				# 		print(f"predict_buffer[{i}]:", predict_buffer[0, i, :])
-				# 		print(f"predict_res[{i}]:", predict_res[0, i, :])
-				# 	exit(0)
 				loss_pred = loss_pred.clone() + criterion(predict_buffer.clone(), predict_res).mean(dim=(1, 2))
 
 			# action: [batch_size, 10, 4]
@@ -251,6 +262,49 @@ if __name__ == "__main__":
 			old_loss = new_loss
 			
 			
+			# calculate image extractor loss
+			dep_image, seg_image = envs.get_camera_dep_seg_output()
+			seg_image = (seg_image != 0).int().float()
+			dep_image = -dep_image
+			dep_image = torch.where(torch.isinf(dep_image), torch.zeros_like(dep_image), dep_image).detach()
+
+			if (last_dep_image is None) or (last_seg_image is None):
+				last_dep_image = dep_image
+				last_seg_image = seg_image
+	
+			# if torch.isnan(last_dep_image).any() or torch.isnan(last_seg_image).any() or torch.isnan(dep_image).any():
+			# 	print("Nan detected in image input!!!")
+			# 	exit(0)
+
+			# if torch.isinf(last_dep_image).any() or torch.isinf(last_seg_image).any() or torch.isinf(dep_image).any():
+			# 	print("Inf detected in image input!!!")
+			# 	print(torch.isinf(last_dep_image).any())
+			# 	print(torch.isinf(dep_image).any())
+			# 	visualize_depth_image(dep_image[0].cpu().numpy())
+			# 	print(dep_image[0])
+			# 	exit(0)
+
+			vision_model_output = vision_model.extractor_module(last_dep_image, last_seg_image, dep_image)
+			# if torch.isnan(vision_model_output["rel_dist"]).any() or torch.isnan(vision_model_output["segmentation"]).any():
+			# 	print("Nan detected in image output!!!")
+			# 	exit(0)		
+			# if torch.isinf(vision_model_output["rel_dist"]).any() or torch.isinf(vision_model_output["segmentation"]).any():
+			# 	print("Inf detected in image output!!!")
+			# 	exit(0)		
+			# print(rel_dis.shape, vision_model_output["rel_dist"].shape, seg_image.shape, vision_model_output["segmentation"].shape)
+			loss_vision_distance = criterion(rel_dis, vision_model_output["rel_dist"]).mean()
+			loss_vision_segmentation = criterion(seg_image, vision_model_output["segmentation"]).mean()
+			
+			# print(loss_vision.shape, loss_vision_distance.shape, loss_vision_segmentation.shape)
+			loss_vision = loss_vision.clone() + loss_vision_distance + loss_vision_segmentation
+			last_dep_image = dep_image
+			last_seg_image = seg_image
+			# # if step > 50:
+			# # print(dep_image.shape, seg_image.shape)
+			# visualize_depth_image(dep_image[0].cpu().numpy())
+			# visualize_seg_image(seg_image[0].cpu().numpy())
+			# exit(0)
+			
 			now_quad_state[reset_idx] = envs.reset(reset_buf=reset_buf)[reset_idx].detach()
 			old_loss.reset(reset_idx=reset_idx)
 			timer = timer + 1
@@ -260,19 +314,8 @@ if __name__ == "__main__":
 
 			if (not (step + 1) % 50):
 				
-				# print(action[0])
-				# print("Loss:", loss[0])
-				# print("shape of predict buffer:", predict_buffer.shape)
-				# print("Shape of predict res:", predict_res.shape)
-				# loss_pred = criterion(predict_buffer, predict_res).mean(dim=(1, 2))
-				# print("Loss pred shape:", loss_pred.shape)
-				# print("Loss agile shape:", loss_agile.shape)
-				# print("predict res:", predict_res[0, 9, :])
-				# print("predict buffer:", predict_buffer[0, 9, :])
-				# exit(0)
-				
-				loss = 0.1 * loss_pred + 0.9 * loss_agile
-				loss.backward(not_reset_buf)
+				loss = loss_vision
+				loss.backward()
 				optimizer.step()
 				optimizer.zero_grad()
 				now_quad_state = now_quad_state.detach()
@@ -281,7 +324,9 @@ if __name__ == "__main__":
 				timer = timer * 0
 				predict_buffer.zero_().detach_()
 				saved_loss_pred = loss_pred.detach()
+				saved_loss_vision = loss_vision.detach()
 				loss_pred = torch.tensor(0.0)
+				loss_vision = torch.tensor(0.0)
 				
 
 
@@ -294,6 +339,7 @@ if __name__ == "__main__":
 		# ave_loss_aux = torch.sum(new_loss.aux) / args.batch_size
 		# ave_loss_intent = torch.sum(loss_intent) / args.batch_size
 		ave_loss_predict = torch.sum(saved_loss_pred) / args.batch_size
+		ave_loss_vision = torch.sum(saved_loss_vision) / args.batch_size
 		ave_loss_agile = torch.sum(loss_agile) / args.batch_size
 		ave_loss = torch.sum(loss) / args.batch_size
 		
@@ -308,6 +354,7 @@ if __name__ == "__main__":
 		writer.add_scalar('Loss Predict', ave_loss_predict.item(), epoch)
 		writer.add_scalar('Loss Agile', ave_loss_agile.item(), epoch)
 		writer.add_scalar('Number Reset', num_reset, epoch)
+		writer.add_scalar('Loss Vision', ave_loss_vision.item(), epoch)
 			
 
 		print(f"Epoch {epoch}, Ave loss = {ave_loss}, num reset = {num_reset}")
@@ -319,7 +366,7 @@ if __name__ == "__main__":
 		
 		if (epoch + 1) % 4000 == 0:
 			print("Saving Model...")
-			model.save_model(param_save_path)
+			vision_model.save_model(param_save_path)
 
 		# if (epoch + 1) % 50 == 0 and len(all_embeddings):
 		# # if  len(all_embeddings):

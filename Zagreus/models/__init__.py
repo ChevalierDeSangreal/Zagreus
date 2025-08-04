@@ -1,2 +1,5 @@
-from .track_agile import TrackAgileModuleVer0, TrackAgileModuleVer1, TrackAgileModuleVer2Dicision, TrackAgileModuleVer2Extractor, TrackAgileModuleVer3, TrackAgileModuleVer4, TrackAgileModuleVer5, TrackAgileModuleVer6, TrackAgileModuleVer7, TrackAgileModuleVer8, TrackAgileModuleVer9
+from .track_agile import TrackAgileModuleVer0, TrackAgileModuleVer1, TrackAgileModuleVer2Dicision
+from .track_agile import TrackAgileModuleVer2Extractor, TrackAgileModuleVer3, TrackAgileModuleVer4
+from .track_agile import TrackAgileModuleVer5, TrackAgileModuleVer6, TrackAgileModuleVer7, TrackAgileModuleVer8
+from .track_agile import TrackAgileModuleVer9, TrackAgileModuleVer10
 from .track_transfer import TrackTransferModuleVer0, WorldModelVer0

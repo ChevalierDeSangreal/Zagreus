@@ -65,6 +65,82 @@ def agile_loss_imageVer0(quad_state, tar_state, pred_dis):
     # exit(0)
     return loss
 
+def agile_lossVer7(loss:AgileLoss, quad_state, tar_state, tar_h, tar_ori, tar_dis, step, dt, init_vec, action, last_action):
+    """
+    Based on agile_lossVer6
+    Improved direction loss to treat horizon and verticle in quadrotor coordinates
+    """
+    ori = quad_state[:, 3:6].clone()
+    vel = quad_state[:, 6:9].clone()
+
+    tar_h = tar_h.unsqueeze(1)
+    # print(tar_h.shape)
+    tar_pos = torch.cat((tar_state[:, :2].clone(), tar_h), dim=1)
+    tar_vel = tar_state[:, 6:9]
+    
+    dis = (tar_pos[:, :3].clone() - quad_state[:, :3].clone())
+    rel_vel = (tar_vel.clone() - vel.clone())
+    
+    norm_hor_dis = torch.norm(dis[:, :2], dim=1, p=2)
+
+    new_loss = AgileLoss(loss.batch_size, loss.device)
+
+    rotation_matrices = euler_angles_to_matrix(ori, convention='XYZ')
+    world_to_body_rm = rotation_matrices.transpose(1, 2)
+    direction_vector_body = torch.bmm(world_to_body_rm, dis.unsqueeze(-1)).squeeze(-1)
+    direction_vector_body_unit = direction_vector_body / direction_vector_body.norm(dim=1, keepdim=True).clamp_min(1e-6)
+
+
+    direction_vector = rotation_matrices @ init_vec
+    direction_vector = direction_vector.squeeze()
+    # print(direction_vector.shape)
+    new_loss.direction_hor = torch.exp(1 - F.cosine_similarity(init_vec[:, :2].squeeze(), direction_vector_body[:, :2])) - 1
+    new_loss.direction_ver = (torch.exp(torch.relu(torch.abs(direction_vector_body_unit[:, 2]) - 0.7)) - 1)
+    
+    new_loss.direction_hor = (new_loss.direction_hor * step + new_loss.direction_hor) / (step + 1)
+    new_loss.direction_ver = (new_loss.direction_ver * step + new_loss.direction_ver) / (step + 1)
+    new_loss.direction = new_loss.direction_ver * 100 + new_loss.direction_hor
+    # new_loss.direction = loss_direction.clone()
+
+    # tmp_norm_hor_dis = torch.clamp(norm_hor_dis, max=5)
+    # norm_hor_vel = torch.norm(vel[:, :2], dim=1, p=2)
+    # loss_speed = torch.abs(tmp_norm_hor_dis - norm_hor_vel)
+    loss_velocity = torch.norm(rel_vel, dim=1, p=2)
+    new_loss.vel = (loss.vel * step + loss_velocity) / (step + 1)
+    # new_loss.vel = loss_velocity.clone()
+    # new_loss.vel = loss_speed.clone()
+
+    loss_distance = torch.abs(norm_hor_dis - tar_dis)
+    new_loss.distance = (loss.distance * step + loss_distance) / (step + 1)
+    # new_loss.distance = loss_distance.clone()
+    
+    loss_h = torch.abs((quad_state[:, 2] - tar_h).norm(dim=1))
+    new_loss.h = (loss.h * step + loss_h) / (step + 1)
+    # new_loss.h = loss_h.clone()
+    
+    # pitch and roll are expected to be zero
+    # loss_ori = torch.norm(tar_ori[:, :2] - ori[:, :2], dim=1, p=2)
+    # loss_ori = torch.norm(tar_ori - ori, dim=1, p=2) - 6
+    # loss_ori = torch.norm(tar_ori - ori, dim=1, p=2)
+    loss_ori = 100 / (100 - 99 * torch.abs(direction_vector[:, 2]))
+    new_loss.ori = (loss.ori * step + loss_ori) / (step + 1)
+    # new_loss.ori = loss_ori.clone()
+
+    if last_action is not None:
+        loss_action = torch.norm(action - last_action, dim=1, p=2)
+    else:
+        loss_action = torch.zeros_like(new_loss.direction, device=new_loss.device)
+    new_loss.aux = (loss.aux * step + loss_action) / (step + 1)
+    # action(body rate) ---> ori & acc ---> vel ---> pos
+    # loss_final = new_loss.direction + new_loss.h * 10 + new_loss.ori + new_loss.distance + new_loss.vel
+    # loss_final = new_loss.ori + new_loss.distance# + new_loss.direction
+
+    loss_final = 1 * new_loss.ori + 100 * new_loss.distance + 1 * new_loss.vel + 50 * new_loss.direction + 100 * new_loss.h + new_loss.aux * 10
+    # loss_final = new_loss.distance + new_loss.h
+
+    return loss_final, new_loss
+
+
 def agile_lossVer6(loss:AgileLoss, quad_state, tar_state, tar_h, tar_ori, tar_dis, step, dt, init_vec, action, last_action):
     """
     Based on agile_lossVer4
