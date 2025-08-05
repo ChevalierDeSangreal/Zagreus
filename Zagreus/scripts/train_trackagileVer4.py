@@ -38,7 +38,7 @@ using agile_lossVer7 which improved direction loss
 
 def get_args():
 	custom_parameters = [
-		{"name": "--task", "type": str, "default": "track_agileVer2", "help": "The name of the task."},
+		{"name": "--task", "type": str, "default": "track_agileVer3", "help": "The name of the task."},
 		{"name": "--experiment_name", "type": str, "default": "track_agileVer4", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},

@@ -504,13 +504,16 @@ class TrackAgileModuleVer10Extractor(nn.Module):
         seg_feat = self.seg_head(output_feature)            # (B, cnn_feats*16*16)
         
         seg_feat = seg_feat.view(B, self.cnn_feats, 16, 16) # (B,8,16,16)
-        s_t = self.up_conv(seg_feat)                        # (B,1,223,223)
+        s_t = self.up_conv(seg_feat).squeeze(1)             # (B,223,223) 未激活的 logits
+        
         s_t = s_t.squeeze(1)
+        probs = torch.sigmoid(s_t)                        # (B,223,223) [0,1] 概率
 
         return {
             'rel_dist': rel_dist, # (B, 3)
             'segmentation': s_t, # (B, 223, 223)
-            'feature': output_feature # (B, mlp_dim)
+            'feature': output_feature, # (B, mlp_dim)
+            'segmentation_probs': probs  # (B, 223, 223) 概率
         }
     
     # def forward(self, d_prev, s_prev, d_curr):

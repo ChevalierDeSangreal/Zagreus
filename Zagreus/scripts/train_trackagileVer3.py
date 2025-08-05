@@ -21,21 +21,21 @@ from Zagreus.config import ROOT_DIR
 # sys.path.append(ROOT_DIR)
 
 # print(sys.path)
-from Zagreus.utils import AgileLoss, agile_lossVer4, agile_lossVer6
+from Zagreus.utils import AgileLoss, agile_lossVer4, agile_lossVer7
 from Zagreus.models import TrackAgileModuleVer9, TrackAgileModuleVer10
 from Zagreus.envs import IrisDynamics, task_registry
 # os.path.basename(__file__).rstrip(".py")
 
 
 """
-Based on trackagileVer2
+Based on trackagileVer4
 In order to pretrain extractor module
 """
 
 
 def get_args():
 	custom_parameters = [
-		{"name": "--task", "type": str, "default": "track_agileVer2", "help": "The name of the task."},
+		{"name": "--task", "type": str, "default": "track_agileVer3", "help": "The name of the task."},
 		{"name": "--experiment_name", "type": str, "default": "track_agileVer3", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
@@ -43,7 +43,7 @@ def get_args():
 		{"name": "--seed", "type": int, "default": 42, "help": "Random seed. Overrides config file if provided."},
 
 		# train setting
-		{"name": "--learning_rate", "type":float, "default": 1.6e-5,
+		{"name": "--learning_rate", "type":float, "default": 1.6e-4,
 			"help": "the learning rate of the optimizer"},
 		{"name": "--batch_size", "type":int, "default": 2,
 			"help": "batch size of training. Notice that batch_size should be equal to num_envs"},
@@ -64,7 +64,7 @@ def get_args():
 		# model setting
 		{"name": "--param_save_name", "type":str, "default": 'track_agileVer3.pth',
 			"help": "The path to model parameters"},
-		{"name": "--param_load_path", "type":str, "default": 'track_agileVer2.pth',
+		{"name": "--param_load_path", "type":str, "default": 'track_agileVer4.pth',
 			"help": "The path to model parameters"},
 		
 		]
@@ -99,8 +99,8 @@ def get_time():
 
 	return formatted_time_local
 
-def visualize_depth_image(image):
-    image_save_path = os.path.join(ROOT_DIR, 'output', "depth_image_batch0.png")
+def visualize_depth_image(image, name="depth_image"):
+    image_save_path = os.path.join(ROOT_DIR, 'output', 'frames', f"{name}.png")
 
     plt.figure(figsize=(6, 6))
     im = plt.imshow(image, cmap='plasma', vmin=np.min(image), vmax=np.max(image))
@@ -110,8 +110,8 @@ def visualize_depth_image(image):
     plt.savefig(image_save_path, bbox_inches='tight', pad_inches=0)
     plt.close()
 
-def visualize_seg_image(image):
-    image_save_path = os.path.join(ROOT_DIR, 'output', "seg_image_batch0.png")
+def visualize_seg_image(image, name="seg_image"):
+    image_save_path = os.path.join(ROOT_DIR, 'output', 'frames', f"{name}.png")
 
     plt.figure(figsize=(6, 6))
     im = plt.imshow(image, cmap='nipy_spectral', interpolation='nearest')
@@ -158,6 +158,7 @@ if __name__ == "__main__":
 	vision_model = TrackAgileModuleVer10(device=device).to(device)
 
 	model.load_model(param_load_path)
+	# vision_model.load_model("/home/core/wangzimo/Zagreus/Zagreus/param/track_agileVer3.pth")
 	# tmp_model.load_model(param_load_path)
 	# model.directpred.load_state_dict(tmp_model.directpred.state_dict())
 	# model.extractor_module.load_state_dict(torch.load('/home/wangzimo/VTT/VTT/Zagreus/param_saved/track_agileVer7.pth', map_location=device))
@@ -166,6 +167,7 @@ if __name__ == "__main__":
 	# optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-5)
 	optimizer = optim.Adam(vision_model.parameters(), lr=args.learning_rate, eps=1e-5)
 	criterion = nn.MSELoss(reduction='none')
+	bce_criterion = nn.BCEWithLogitsLoss()
 	# scheduler = lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
 
 	tar_ori = torch.zeros((args.batch_size, 3)).to(device)
@@ -258,7 +260,7 @@ if __name__ == "__main__":
 			input_buffer[:, reset_idx] = 0
 
 			# loss_agile, new_loss = agile_lossVer4(old_loss, now_quad_state, tar_state, 7, tar_ori, 2, timer, envs.cfg.sim.dt, init_vec)
-			loss_agile, new_loss = agile_lossVer6(old_loss, now_quad_state, tar_state, 7, tar_ori, 2, timer, envs.cfg.sim.dt, init_vec, action, last_action)
+			loss_agile, new_loss = agile_lossVer7(old_loss, now_quad_state, tar_state, tar_state[:, 2].clone(), tar_ori, 2, timer, envs.cfg.sim.dt, init_vec, action, last_action)
 			old_loss = new_loss
 			
 			
@@ -267,6 +269,10 @@ if __name__ == "__main__":
 			seg_image = (seg_image != 0).int().float()
 			dep_image = -dep_image
 			dep_image = torch.where(torch.isinf(dep_image), torch.zeros_like(dep_image), dep_image).detach()
+
+			# visualize_depth_image(dep_image[0].cpu().numpy(), name=f"depth{step}")
+			# visualize_seg_image(seg_image[0].cpu().numpy(), name=f"seg{step}")
+			
 
 			if (last_dep_image is None) or (last_seg_image is None):
 				last_dep_image = dep_image
@@ -285,6 +291,7 @@ if __name__ == "__main__":
 			# 	exit(0)
 
 			vision_model_output = vision_model.extractor_module(last_dep_image, last_seg_image, dep_image)
+			# visualize_seg_image(vision_model_output["segmentation"][0].detach().cpu().numpy(), name=f"seg_output{step}")
 			# if torch.isnan(vision_model_output["rel_dist"]).any() or torch.isnan(vision_model_output["segmentation"]).any():
 			# 	print("Nan detected in image output!!!")
 			# 	exit(0)		
@@ -293,8 +300,9 @@ if __name__ == "__main__":
 			# 	exit(0)		
 			# print(rel_dis.shape, vision_model_output["rel_dist"].shape, seg_image.shape, vision_model_output["segmentation"].shape)
 			loss_vision_distance = criterion(rel_dis, vision_model_output["rel_dist"]).mean()
-			loss_vision_segmentation = criterion(seg_image, vision_model_output["segmentation"]).mean()
-			
+			loss_vision_segmentation = bce_criterion(vision_model_output["segmentation"], seg_image)
+			# print("Vision distance loss:", loss_vision_distance)
+			# print("Vision segmentation loss:", loss_vision_segmentation)
 			# print(loss_vision.shape, loss_vision_distance.shape, loss_vision_segmentation.shape)
 			loss_vision = loss_vision.clone() + loss_vision_distance + loss_vision_segmentation
 			last_dep_image = dep_image
@@ -314,7 +322,7 @@ if __name__ == "__main__":
 
 			if (not (step + 1) % 50):
 				
-				loss = loss_vision
+				loss = loss_vision / 50
 				loss.backward()
 				optimizer.step()
 				optimizer.zero_grad()
@@ -358,13 +366,13 @@ if __name__ == "__main__":
 			
 
 		print(f"Epoch {epoch}, Ave loss = {ave_loss}, num reset = {num_reset}")
-
+		# break
 		
 		if epoch == 2000:  
 			for param_group in optimizer.param_groups:
 				param_group['lr'] = 1.6e-5
 		
-		if (epoch + 1) % 4000 == 0:
+		if (epoch + 1) % 100 == 0:
 			print("Saving Model...")
 			vision_model.save_model(param_save_path)
 
