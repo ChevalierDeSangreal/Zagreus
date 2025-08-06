@@ -515,109 +515,6 @@ class TrackAgileModuleVer10Extractor(nn.Module):
             'feature': output_feature, # (B, mlp_dim)
             'segmentation_probs': probs  # (B, 223, 223) 概率
         }
-    
-    # def forward(self, d_prev, s_prev, d_curr):
-    #     print("!!")
-    #     B = d_prev.shape[0]
-    #     d_prev = d_prev.unsqueeze(1)
-    #     s_prev = s_prev.unsqueeze(1)
-    #     d_curr = d_curr.unsqueeze(1)
-
-    #     ### ---- Encoder path ----
-    #     x_prev = torch.cat([d_prev, s_prev], dim=1)  # (B,2,223,223)
-    #     if torch.isnan(x_prev).any():
-    #         print("NaN detected in x_prev after concatenation")
-    #         exit(0)
-    #     if torch.isinf(x_prev).any():
-    #         print("Inf detected in x_prev after concatenation")
-    #         exit(0)
-    #     for name, param in self.backbone_prev.named_parameters():
-    #         if torch.isnan(param).any() or torch.isinf(param).any():
-    #             print(f"NaN or Inf detected in weight: {name}")
-    #     # print(f"x_prev min: {x_prev.min().item():.6f}, max: {x_prev.max().item():.6f}")
-
-    #     feat_prev = self.backbone_prev(x_prev)       # (B,32,56,56)
-    #     if torch.isnan(feat_prev).any():
-    #         print("NaN detected in feat_prev after backbone_prev")
-    #         exit(0)
-
-    #     feat_prev = self.pool_prev(feat_prev)        # (B,8,16,16)
-    #     if torch.isnan(feat_prev).any():
-    #         print("NaN detected in feat_prev after pool_prev")
-    #         exit(0)
-
-    #     enc_tokens = feat_prev.view(B, self.cnn_feats, -1)  # (B, 8, 256)
-    #     enc_tokens = self.ln_tokens(enc_tokens)             # (B, 8, 256)
-    #     if torch.isnan(enc_tokens).any():
-    #         print("NaN detected in enc_tokens after layer norm")
-    #         exit(0)
-
-    #     enc_out, _ = self.encoder_attn(enc_tokens, enc_tokens, enc_tokens)  # (B, 8, 256)
-    #     if torch.isnan(enc_out).any():
-    #         print("NaN detected in enc_out after encoder attention")
-    #         exit(0)
-
-    #     ### ---- Decoder path ----
-    #     feat_curr = self.backbone_curr(d_curr)              # (B,8,56,56)
-    #     if torch.isnan(feat_curr).any():
-    #         print("NaN detected in feat_curr after backbone_curr")
-    #         exit(0)
-
-    #     feat_curr = self.pool_curr(feat_curr)               # (B,8,16,16)
-    #     if torch.isnan(feat_curr).any():
-    #         print("NaN detected in feat_curr after pool_curr")
-    #         exit(0)
-
-    #     dec_tokens = feat_curr.view(B, self.cnn_feats, -1)  # (B,8,256)
-    #     dec_tokens = self.ln_tokens(dec_tokens)             # (B,8,256)
-    #     if torch.isnan(dec_tokens).any():
-    #         print("NaN detected in dec_tokens after layer norm")
-    #         exit(0)
-
-    #     dec_out, _ = self.decoder_attn(dec_tokens, enc_out, enc_out)  # (B, 8, 256)
-    #     if torch.isnan(dec_out).any():
-    #         print("NaN detected in dec_out after decoder attention")
-    #         exit(0)
-
-    #     ### ---- Output path ----
-    #     dec_out_flat = dec_out.reshape(B, -1)                  # (B, 8*256)
-    #     if torch.isnan(dec_out_flat).any():
-    #         print("NaN detected in dec_out_flat after flatten")
-    #         exit(0)
-
-    #     output_feature = self.mlp_out(dec_out_flat)         # (B, mlp_dim)
-    #     if torch.isnan(output_feature).any():
-    #         print("NaN detected in output_feature after mlp_out")
-    #         exit(0)
-
-    #     rel_dist = self.regressor(output_feature)           # (B,3)
-    #     if torch.isnan(rel_dist).any():
-    #         print("NaN detected in rel_dist")
-    #         exit(0)
-
-    #     seg_feat = self.seg_head(output_feature)            # (B, cnn_feats*16*16)
-    #     if torch.isnan(seg_feat).any():
-    #         print("NaN detected in seg_feat after seg_head")
-    #         exit(0)
-
-    #     seg_feat = seg_feat.view(B, self.cnn_feats, 16, 16) # (B,8,16,16)
-    #     s_t = self.up_conv(seg_feat)                        # (B,1,223,223)
-    #     if torch.isnan(s_t).any():
-    #         print("NaN detected in s_t after up_conv")
-    #         exit(0)
-
-    #     s_t = s_t.squeeze(1)
-    #     if torch.isnan(s_t).any():
-    #         print("NaN detected in s_t after squeeze")
-    #         exit(0)
-
-    #     return {
-    #         'rel_dist': rel_dist,             # (B, 3)
-    #         'segmentation': s_t,              # (B, 223, 223)
-    #         'feature': output_feature         # (B, mlp_dim)
-    #     }
-
-
 
 class TrackAgileModuleVer10(nn.Module):
     """
@@ -628,12 +525,14 @@ class TrackAgileModuleVer10(nn.Module):
         super(TrackAgileModuleVer10, self).__init__()
         self.device = device
 
+        image_feature_size = 64
+
         # Initialize Decision module
-        self.decision_module = TrackAgileModuleVer4Dicision(input_size=6+64,device=device).to(device)
+        self.decision_module = TrackAgileModuleVer4Dicision(input_size=6+image_feature_size,device=device).to(device)
 
         self.predict_module = TrackTransferModuleVer0Predict(device=device).to(device)
 
-        self.extractor_module = TrackAgileModuleVer10Extractor().to(device)
+        self.extractor_module = TrackAgileModuleVer10Extractor(mlp_dim=image_feature_size).to(device)
 
     def save_model(self, path):
         """Save the model's state dictionary to the specified path."""

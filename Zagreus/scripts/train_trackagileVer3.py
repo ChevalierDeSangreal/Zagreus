@@ -39,13 +39,13 @@ def get_args():
 		{"name": "--experiment_name", "type": str, "default": "track_agileVer3", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
-		{"name": "--num_envs", "type": int, "default": 2, "help": "Number of environments to create. Batch size will be equal to this"},
+		{"name": "--num_envs", "type": int, "default": 16, "help": "Number of environments to create. Batch size will be equal to this"},
 		{"name": "--seed", "type": int, "default": 42, "help": "Random seed. Overrides config file if provided."},
 
 		# train setting
 		{"name": "--learning_rate", "type":float, "default": 1.6e-4,
 			"help": "the learning rate of the optimizer"},
-		{"name": "--batch_size", "type":int, "default": 2,
+		{"name": "--batch_size", "type":int, "default": 16,
 			"help": "batch size of training. Notice that batch_size should be equal to num_envs"},
 		{"name": "--num_worker", "type":int, "default": 4,
 			"help": "num worker of dataloader"},
@@ -250,6 +250,7 @@ if __name__ == "__main__":
 			
 			new_state_dyn, acceleration = dynamic(now_quad_state, action, envs.cfg.sim.dt)
 			new_state_sim, tar_state = envs.step(new_state_dyn.detach())
+			
 			tar_pos = tar_state[:, :3].detach()
 			
 			now_quad_state = new_state_dyn
@@ -266,6 +267,7 @@ if __name__ == "__main__":
 			
 			# calculate image extractor loss
 			dep_image, seg_image = envs.get_camera_dep_seg_output()
+			
 			seg_image = (seg_image != 0).int().float()
 			dep_image = -dep_image
 			dep_image = torch.where(torch.isinf(dep_image), torch.zeros_like(dep_image), dep_image).detach()
@@ -289,8 +291,9 @@ if __name__ == "__main__":
 			# 	visualize_depth_image(dep_image[0].cpu().numpy())
 			# 	print(dep_image[0])
 			# 	exit(0)
-
+			# print('?????????????')
 			vision_model_output = vision_model.extractor_module(last_dep_image, last_seg_image, dep_image)
+			
 			# visualize_seg_image(vision_model_output["segmentation"][0].detach().cpu().numpy(), name=f"seg_output{step}")
 			# if torch.isnan(vision_model_output["rel_dist"]).any() or torch.isnan(vision_model_output["segmentation"]).any():
 			# 	print("Nan detected in image output!!!")
@@ -299,7 +302,7 @@ if __name__ == "__main__":
 			# 	print("Inf detected in image output!!!")
 			# 	exit(0)		
 			# print(rel_dis.shape, vision_model_output["rel_dist"].shape, seg_image.shape, vision_model_output["segmentation"].shape)
-			loss_vision_distance = criterion(rel_dis, vision_model_output["rel_dist"]).mean()
+			loss_vision_distance = criterion(body_rel_dis, vision_model_output["rel_dist"]).mean()
 			loss_vision_segmentation = bce_criterion(vision_model_output["segmentation"], seg_image)
 			# print("Vision distance loss:", loss_vision_distance)
 			# print("Vision segmentation loss:", loss_vision_segmentation)
@@ -314,6 +317,7 @@ if __name__ == "__main__":
 			# exit(0)
 			
 			now_quad_state[reset_idx] = envs.reset(reset_buf=reset_buf)[reset_idx].detach()
+			
 			old_loss.reset(reset_idx=reset_idx)
 			timer = timer + 1
 			timer[reset_idx] = 0
