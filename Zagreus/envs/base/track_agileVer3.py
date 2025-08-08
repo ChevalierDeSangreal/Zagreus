@@ -117,7 +117,7 @@ class TrackAgileVer3(BaseTask):
         # self.traj_generator = TrajectoryGenerator(tar_v, self.cfg.sim.dt, direction_change_interval, total_time=10, batch_size=self.num_envs, device=self.device)
         # self.traj = self.traj_generator.batch_generate_trajectories()
 
-        self.tar_acc_norm = 1
+        self.tar_acc_norm = 0.5
         self.tar_acc_intervel = 100 # How many time steps will acceleration change once
         self.tar_acc = torch.zeros((self.num_envs, 2), dtype=torch.float, device=self.device)
 
@@ -601,16 +601,16 @@ class TrackAgileVer3(BaseTask):
         
         
     def check_reset_out(self):
-        # $$$ First place
-        seg_image = self.get_camera_seg_output().to(device=self.device)
-        sum_seg_image = torch.sum(seg_image, dim=(1, 2))
-        # print(sum_dep_image)
-        # print(torch.tensor(1, device=self.device), torch.tensor(0, device=self.device))
-        out_sight = torch.where(sum_seg_image == 0, torch.tensor(1, device=self.device), torch.tensor(0, device=self.device)).squeeze(-1)
-        out_sight_idx = torch.nonzero(out_sight).squeeze(-1)
-        # if len(out_sight_idx):
-        #     print("out_sight:", out_sight_idx)
-        # print("##### 7")
+        # # $$$ First place
+        # seg_image = self.get_camera_seg_output().to(device=self.device)
+        # sum_seg_image = torch.sum(seg_image, dim=(1, 2))
+        # # print(sum_dep_image)
+        # # print(torch.tensor(1, device=self.device), torch.tensor(0, device=self.device))
+        # out_sight = torch.where(sum_seg_image == 0, torch.tensor(1, device=self.device), torch.tensor(0, device=self.device)).squeeze(-1)
+        # out_sight_idx = torch.nonzero(out_sight).squeeze(-1)
+        # # if len(out_sight_idx):
+        # #     print("out_sight:", out_sight_idx)
+        # # print("##### 7")
 
         ones = torch.ones_like(self.reset_buf)
         out_space = torch.zeros_like(self.reset_buf)
@@ -629,8 +629,8 @@ class TrackAgileVer3(BaseTask):
         #     print("out_time:", out_time_idx)
         
         # # $$$ Another first place
-        reset_buf = torch.logical_or(out_space, torch.logical_or(out_sight, out_time))
-        # reset_buf = torch.logical_or(out_space, out_time)
+        # reset_buf = torch.logical_or(out_space, torch.logical_or(out_sight, out_time))
+        reset_buf = torch.logical_or(out_space, out_time)
         reset_idx = torch.nonzero(reset_buf).squeeze(-1)
         
         
@@ -704,17 +704,17 @@ class TrackAgileVer3(BaseTask):
         return quaternions
     
     def render(self, sync_frame_time=True):
-        # $$$ Second place
-        # print("##### 5.1")
-        # Fetch results
-        self.gym.fetch_results(self.sim, True) # use only when device is not "cpu"
-        # Step graphics. Skipping this causes the onboard robot camera tensors to not be updated
-        # print("##### 5.2")
-        self.gym.step_graphics(self.sim)
-        # print("##### 5.3")
-        self.gym.render_all_camera_sensors(self.sim)
-        # print("##### 5.4")
-        # if viewer exists update it based on requirement
+        # # $$$ Second place
+        # # print("##### 5.1")
+        # # Fetch results
+        # self.gym.fetch_results(self.sim, True) # use only when device is not "cpu"
+        # # Step graphics. Skipping this causes the onboard robot camera tensors to not be updated
+        # # print("##### 5.2")
+        # self.gym.step_graphics(self.sim)
+        # # print("##### 5.3")
+        # self.gym.render_all_camera_sensors(self.sim)
+        # # print("##### 5.4")
+        # # if viewer exists update it based on requirement
         if self.viewer:
             # print("##### 5.5")
             # check for window closed

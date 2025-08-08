@@ -339,6 +339,7 @@ if __name__ == "__main__":
 		if epoch == 2000:  
 			for param_group in optimizer.param_groups:
 				param_group['lr'] = 1.6e-5
+		if epoch == 800:
 			for param in model.extractor_module.parameters():
 				param.requires_grad = True
 		

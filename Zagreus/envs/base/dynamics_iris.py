@@ -230,7 +230,7 @@ class IrisDynamics(MyDynamics):
 
         # action is normalized between 0 and 1 --> rescale
         # print(action.shape)
-        total_thrust = action[:, 0] * (2 * self.mass * (self.torch_gravity[2])) + self.mass * (-self.torch_gravity[2])
+        total_thrust = - action[:, 0] * (2 * self.mass * (self.torch_gravity[2]))
         # print(total_thrust.shape)
         # total_thrust = action[:, 0] * 7.5 + self.mass * (-self.torch_gravity[2])
         body_rates = action[:, 1:] * 3
