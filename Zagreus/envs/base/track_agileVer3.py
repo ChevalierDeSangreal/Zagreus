@@ -117,7 +117,7 @@ class TrackAgileVer3(BaseTask):
         # self.traj_generator = TrajectoryGenerator(tar_v, self.cfg.sim.dt, direction_change_interval, total_time=10, batch_size=self.num_envs, device=self.device)
         # self.traj = self.traj_generator.batch_generate_trajectories()
 
-        self.tar_acc_norm = 0
+        self.tar_acc_norm = 2
         self.tar_acc_intervel = 100 # How many time steps will acceleration change once
         self.tar_acc = torch.zeros((self.num_envs, 2), dtype=torch.float, device=self.device)
 

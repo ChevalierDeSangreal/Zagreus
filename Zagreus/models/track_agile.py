@@ -589,7 +589,7 @@ class TrackAgileModuleVer11(nn.Module):
 
     def load_model(self, path):
         """Load the model's state dictionary from the specified path."""
-        self.load_state_dict(torch.load(path, map_location=self.device, weights_only=True))
+        self.load_state_dict(torch.load(path, map_location=self.device))
 
     def set_eval_mode(self):
         """Set the model to evaluation mode."""
