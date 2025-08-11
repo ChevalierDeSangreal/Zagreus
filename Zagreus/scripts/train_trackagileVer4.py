@@ -42,13 +42,13 @@ def get_args():
 		{"name": "--experiment_name", "type": str, "default": "track_agileVer4", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
-		{"name": "--num_envs", "type": int, "default": 64, "help": "Number of environments to create. Batch size will be equal to this"},
+		{"name": "--num_envs", "type": int, "default": 16, "help": "Number of environments to create. Batch size will be equal to this"},
 		{"name": "--seed", "type": int, "default": 42, "help": "Random seed. Overrides config file if provided."},
 
 		# train setting
 		{"name": "--learning_rate", "type":float, "default": 1.6e-4,
 			"help": "the learning rate of the optimizer"},
-		{"name": "--batch_size", "type":int, "default": 64,
+		{"name": "--batch_size", "type":int, "default": 16,
 			"help": "batch size of training. Notice that batch_size should be equal to num_envs"},
 		{"name": "--num_worker", "type":int, "default": 4,
 			"help": "num worker of dataloader"},
@@ -309,7 +309,7 @@ if __name__ == "__main__":
 			for param_group in optimizer.param_groups:
 				param_group['lr'] = 1.6e-5
 		
-		if (epoch + 1) % 4000 == 0:
+		if (epoch + 1) % 1000 == 0:
 			print("Saving Model...")
 			model.save_model(param_save_path)
 

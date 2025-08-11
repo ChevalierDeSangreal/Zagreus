@@ -349,7 +349,7 @@ class TrackAgileModuleVer8(nn.Module):
 
     def load_model(self, path):
         """Load the model's state dictionary from the specified path."""
-        self.load_state_dict(torch.load(path, map_location=self.device))
+        self.load_state_dict(torch.load(path, map_location=self.device, weights_only=True))
 
     def set_eval_mode(self):
         """Set the model to evaluation mode."""
@@ -370,6 +370,7 @@ class TrackAgileModuleVer4Dicision(nn.Module):
         embedding, _ = self.gru(x, h0)
         out = self.fc(embedding[-1, :, :])
         out = out.view(x.shape[1], self.seq_len, -1)
+        out = torch.sigmoid(out)
         return out, embedding[-1, :, :]
     
 
@@ -394,7 +395,7 @@ class TrackAgileModuleVer9(nn.Module):
 
     def load_model(self, path):
         """Load the model's state dictionary from the specified path."""
-        self.load_state_dict(torch.load(path, map_location=self.device))
+        self.load_state_dict(torch.load(path, map_location=self.device, weights_only=True))
 
     def set_eval_mode(self):
         """Set the model to evaluation mode."""
@@ -540,7 +541,7 @@ class TrackAgileModuleVer10(nn.Module):
 
     def load_model(self, path):
         """Load the model's state dictionary from the specified path."""
-        self.load_state_dict(torch.load(path, map_location=self.device))
+        self.load_state_dict(torch.load(path, map_location=self.device, weights_only=True))
 
     def set_eval_mode(self):
         """Set the model to evaluation mode."""

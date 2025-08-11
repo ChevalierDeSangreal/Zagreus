@@ -190,32 +190,6 @@ class IrisDynamics(MyDynamics):
 
     def __call__(self, state, action, dt):
         return self.simulate_quadrotor(action, state, dt)
-    
-    def control_quadrotor(self, action, state):
-        # extract state
-        position = state[:, :3]
-        attitude = state[:, 3:6]
-        velocity = state[:, 6:9]
-        angular_velocity = state[:, 9:]
-        # print(self.mass.device, action.device, self.torch_gravity.device)
-        # action is normalized between -1 and 1 --> rescale
-        total_thrust = action[:, 0] * (2 * self.mass * (self.torch_gravity[2])) + self.mass * (-self.torch_gravity[2])
-        # total_thrust = action[:, 0] * 7.5 + self.mass * (-self.torch_gravity[2])
-        body_rates = action[:, 1:] * 3
-
-        # ctl_dt ist simulation time,
-        # remainer wird immer -sim_dt gemacht in jedem loop
-        # precompute cross product (batch, 3, 1)
-        # print(angular_velocity.shape)
-        inertia_av = torch.matmul(
-            self.torch_inertia_J.to(self.device), torch.unsqueeze(angular_velocity, 2)
-        )[:, :, 0]
-        cross_prod = torch.cross(angular_velocity, inertia_av, dim=1)
-
-        force_torques = self.run_flight_control(
-            total_thrust, angular_velocity, body_rates, cross_prod
-        ).to(self.device)
-        return force_torques
         
 
     def simulate_quadrotor(self, action, state, dt):
@@ -233,7 +207,7 @@ class IrisDynamics(MyDynamics):
         total_thrust = - action[:, 0] * (2 * self.mass * (self.torch_gravity[2]))
         # print(total_thrust.shape)
         # total_thrust = action[:, 0] * 7.5 + self.mass * (-self.torch_gravity[2])
-        body_rates = action[:, 1:] * 3
+        body_rates = (action[:, 1:] * 2 - 1) * 3
 
         # ctl_dt ist simulation time,
         # remainer wird immer -sim_dt gemacht in jedem loop

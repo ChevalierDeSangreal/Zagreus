@@ -52,7 +52,7 @@ def get_args():
 			"help": "num worker of dataloader"},
 		{"name": "--num_epoch", "type":int, "default": 500,
 			"help": "num of epoch"},
-		{"name": "--len_sample", "type":int, "default": 650,
+		{"name": "--len_sample", "type":int, "default": 1200,
 			"help": "length of a sample"},
 		{"name": "--tmp", "type": bool, "default": False, "help": "Set false to officially save the trainning log"},
 		{"name": "--gamma", "type":int, "default": 0.8,
