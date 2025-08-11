@@ -546,3 +546,51 @@ class TrackAgileModuleVer10(nn.Module):
     def set_eval_mode(self):
         """Set the model to evaluation mode."""
         self.eval()
+
+
+class TrackAgileModuleVer5Dicision(nn.Module):
+    def __init__(self, input_size=9+9, hidden_size=256, output_size=4, num_layers=2, device='cpu'):
+        super(TrackAgileModuleVer5Dicision, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.gru = nn.GRU(input_size, hidden_size, num_layers).to(device)
+        self.fc = nn.Linear(hidden_size, output_size).to(device)
+        torch.nn.init.kaiming_normal_(self.fc.weight)
+
+    def forward(self, x):
+        h0 = torch.zeros(self.num_layers, x.shape[1], self.hidden_size).to(x[0].device)
+        # print(x.shape, h0.shape)
+        out, _ = self.gru(x, h0)
+        # print(out.shape)
+        out = self.fc(out[-1, :, :])
+        # print(out.shape)
+        out = torch.sigmoid(out)
+        return out
+    
+class TrackAgileModuleVer11(nn.Module):
+    """
+    Based on ver10
+    Do not use embedding framework
+    """
+    def __init__(self, device='cpu'):
+        super(TrackAgileModuleVer11, self).__init__()
+        self.device = device
+
+        image_feature_size = 64
+
+        # Initialize Decision module
+        self.decision_module = TrackAgileModuleVer5Dicision(input_size=6+3,device=device).to(device)
+
+        self.predict_module = TrackTransferModuleVer0Predict(device=device).to(device)
+
+    def save_model(self, path):
+        """Save the model's state dictionary to the specified path."""
+        torch.save(self.state_dict(), path)
+
+    def load_model(self, path):
+        """Load the model's state dictionary from the specified path."""
+        self.load_state_dict(torch.load(path, map_location=self.device, weights_only=True))
+
+    def set_eval_mode(self):
+        """Set the model to evaluation mode."""
+        self.eval()

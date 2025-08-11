@@ -21,33 +21,31 @@ from Zagreus.config import ROOT_DIR
 # sys.path.append(ROOT_DIR)
 
 # print(sys.path)
-from Zagreus.utils import AgileLoss, agile_lossVer4, agile_lossVer7
-from Zagreus.models import TrackAgileModuleVer9
+from Zagreus.utils import AgileLoss, agile_lossVer7
+from Zagreus.models import TrackAgileModuleVer11
 from Zagreus.envs import IrisDynamics, task_registry
 # os.path.basename(__file__).rstrip(".py")
 
 
 """
-Based on trackagileVer2
-using environment track_agileVer3
-Changed desired height to height of target
-using agile_lossVer7 which improved direction loss
+Based on trackagileVer4 and Ver11 in VTT
+do not use embedding framework to test sim2real
 """
 
 
 def get_args():
 	custom_parameters = [
 		{"name": "--task", "type": str, "default": "track_agileVer3", "help": "The name of the task."},
-		{"name": "--experiment_name", "type": str, "default": "track_agileVer4", "help": "Name of the experiment to run or load."},
+		{"name": "--experiment_name", "type": str, "default": "track_agileVer6", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
-		{"name": "--num_envs", "type": int, "default": 16, "help": "Number of environments to create. Batch size will be equal to this"},
+		{"name": "--num_envs", "type": int, "default": 32, "help": "Number of environments to create. Batch size will be equal to this"},
 		{"name": "--seed", "type": int, "default": 42, "help": "Random seed. Overrides config file if provided."},
 
 		# train setting
 		{"name": "--learning_rate", "type":float, "default": 1.6e-4,
 			"help": "the learning rate of the optimizer"},
-		{"name": "--batch_size", "type":int, "default": 16,
+		{"name": "--batch_size", "type":int, "default": 32,
 			"help": "batch size of training. Notice that batch_size should be equal to num_envs"},
 		{"name": "--num_worker", "type":int, "default": 4,
 			"help": "num worker of dataloader"},
@@ -64,9 +62,9 @@ def get_args():
 			"help": "learning rate will decrease every step_size steps"},
 
 		# model setting
-		{"name": "--param_save_name", "type":str, "default": 'track_agileVer4.pth',
+		{"name": "--param_save_name", "type":str, "default": 'track_agileVer6.pth',
 			"help": "The path to model parameters"},
-		{"name": "--param_load_path", "type":str, "default": 'track_agileVer4.pth',
+		{"name": "--param_load_path", "type":str, "default": 'track_agileVer6.pth',
 			"help": "The path to model parameters"},
 		
 		]
@@ -134,7 +132,7 @@ if __name__ == "__main__":
 	dynamic = IrisDynamics()
 
 	# tmp_model = TrackAgileModuleVer3(device=device).to(device)
-	model = TrackAgileModuleVer9(device=device).to(device)
+	model = TrackAgileModuleVer11(device=device).to(device)
 
 	# model.load_model(param_load_path)
 	# tmp_model.load_model(param_load_path)
@@ -156,24 +154,18 @@ if __name__ == "__main__":
 	init_vec = torch.tensor([[1.0, 0.0, 0.0]] * args.batch_size, device=device).unsqueeze(-1)
 
 	
-	embedding_recording_enabled = False
-	all_embeddings = []
-	all_states = []
-	
 
 	for epoch in range(args.num_epoch):
 		
 		print(f"Epoch {epoch} begin...")
-		# embedding_recording_enabled = (epoch > 2000 and epoch <= 2500)
-		embedding_recording_enabled = True
+		
 		old_loss = AgileLoss(args.batch_size, device=device)
-		loss_pred = torch.tensor(0.0)
 		optimizer.zero_grad()
 		
 		timer = torch.zeros((args.batch_size,), device=device)
 
 		input_buffer = torch.zeros(args.slide_size, args.batch_size, 6+3).to(device)
-		predict_buffer = torch.zeros(args.batch_size, 10, 9).to(device)
+
 		last_action = None
 
 		reset_buf = None
@@ -197,43 +189,14 @@ if __name__ == "__main__":
 			body_rel_dis = torch.matmul(world_to_body, torch.unsqueeze(rel_dis, 2)).squeeze(-1)
 			body_vel = torch.matmul(world_to_body, torch.unsqueeze(now_quad_state[:, 6:9], 2)).squeeze(-1)
 			
-			if step % 10 == 0:
-
-
-				tmp_input = torch.cat((body_vel, now_quad_state[:, 3:6], body_rel_dis), dim=1)
+			tmp_input = torch.cat((body_vel, now_quad_state[:, 3:6], body_rel_dis), dim=1)
+		
+			tmp_input = tmp_input.unsqueeze(0)
+			input_buffer = input_buffer[1:].clone()
+			input_buffer = torch.cat((input_buffer, tmp_input), dim=0)
 			
-				tmp_input = tmp_input.unsqueeze(0)
-				input_buffer = input_buffer[1:].clone()
-				input_buffer = torch.cat((input_buffer, tmp_input), dim=0)
-				
-				action_seq, embedding = model.decision_module(input_buffer.clone())
-				
-				init_pos = now_quad_state[:, :3].detach()
-				# print("embedding shape:", embedding.shape)
-				predict_res = model.predict_module(embedding)
-
-				if embedding_recording_enabled:
-					all_embeddings.append(embedding.detach().cpu())
-					all_states.append(now_quad_state.detach().cpu())
+			action = model.decision_module(input_buffer.clone())
 			
-			idx_predict = step % 10
-			predict_buffer[:, idx_predict, :3] = now_quad_state[:, :3].detach() - init_pos
-			predict_buffer[:, idx_predict, 3:6] = body_vel.detach()
-			predict_buffer[:, idx_predict, 6:9] = now_quad_state[:, 3:6].detach()
-
-			if not (step + 1) % 10:
-
-				# if step:
-				# 	print("Embedding shape:", embedding.shape)
-				# 	print(embedding[0, :])
-				# 	for i in range(10):
-				# 		print(f"predict_buffer[{i}]:", predict_buffer[0, i, :])
-				# 		print(f"predict_res[{i}]:", predict_res[0, i, :])
-				# 	exit(0)
-				loss_pred = loss_pred.clone() + criterion(predict_buffer.clone(), predict_res).mean(dim=(1, 2))
-				# print(loss_pred.shape)
-			# action: [batch_size, 10, 4]
-			action = action_seq[:, step % 10, :].clone()
 			
 			new_state_dyn, acceleration = dynamic(now_quad_state, action, envs.cfg.sim.dt)
 			new_state_sim, tar_state = envs.step(new_state_dyn.detach())
@@ -247,9 +210,8 @@ if __name__ == "__main__":
 			input_buffer[:, reset_idx] = 0
 
 			# loss_agile, new_loss = agile_lossVer4(old_loss, now_quad_state, tar_state, 7, tar_ori, 2, timer, envs.cfg.sim.dt, init_vec)
-			loss_agile, new_loss = agile_lossVer7(old_loss, now_quad_state, tar_state, tar_state[:, 2].clone(), tar_ori, 2, timer, envs.cfg.sim.dt, init_vec, action, last_action)
+			loss, new_loss = agile_lossVer7(old_loss, now_quad_state, tar_state, tar_state[:, 2].clone(), tar_ori, 2, timer, envs.cfg.sim.dt, init_vec, action, last_action)
 			old_loss = new_loss
-			
 			
 			now_quad_state[reset_idx] = envs.reset(reset_buf=reset_buf)[reset_idx].detach()
 			old_loss.reset(reset_idx=reset_idx)
@@ -258,11 +220,11 @@ if __name__ == "__main__":
 			last_action = action.clone().detach()
 			# print("Length of reset buf:", len(reset_idx), not_reset_buf)
 
+
 			if (not (step + 1) % 50):
 				
-				
-				loss = 0.1 * loss_pred + 0.9 * loss_agile
-				# print(loss.shape, not_reset_buf.shape, loss_agile.shape)
+				# print(action[0])
+				# print("Loss:", loss[0])
 				loss.backward(not_reset_buf)
 				optimizer.step()
 				optimizer.zero_grad()
@@ -270,10 +232,6 @@ if __name__ == "__main__":
 				old_loss = AgileLoss(args.batch_size, device=device)
 				input_buffer = input_buffer.detach()
 				timer = timer * 0
-				predict_buffer.zero_().detach_()
-				saved_loss_pred = loss_pred.detach()
-				loss_pred = torch.tensor(0.0)
-				
 
 
 
@@ -284,8 +242,6 @@ if __name__ == "__main__":
 		ave_loss_h = torch.sum(new_loss.h) / args.batch_size
 		# ave_loss_aux = torch.sum(new_loss.aux) / args.batch_size
 		# ave_loss_intent = torch.sum(loss_intent) / args.batch_size
-		ave_loss_predict = torch.sum(saved_loss_pred) / args.batch_size
-		ave_loss_agile = torch.sum(loss_agile) / args.batch_size
 		ave_loss = torch.sum(loss) / args.batch_size
 		
 		writer.add_scalar('Loss', ave_loss.item(), epoch)
@@ -296,8 +252,6 @@ if __name__ == "__main__":
 		writer.add_scalar('Loss Orientation', ave_loss_ori.item(), epoch)
 		writer.add_scalar('Loss Height', ave_loss_h.item(), epoch)
 		# writer.add_scalar('Loss Aux', ave_loss_aux.item(), epoch)
-		writer.add_scalar('Loss Predict', ave_loss_predict.item(), epoch)
-		writer.add_scalar('Loss Agile', ave_loss_agile.item(), epoch)
 		writer.add_scalar('Number Reset', num_reset, epoch)
 			
 
