@@ -21,23 +21,22 @@ from Zagreus.config import ROOT_DIR
 # sys.path.append(ROOT_DIR)
 
 # print(sys.path)
-from Zagreus.envs import *
-from Zagreus.utils import velh_lossVer5, agile_lossVer1, AgileLoss, agile_lossVer4, agile_lossVer6
+from Zagreus.utils import AgileLoss, agile_lossVer6
 from Zagreus.models import TrackTransferModuleVer0
-from Zagreus.envs import IsaacGymDynamics
+from Zagreus.envs import IrisDynamics, task_registry
 # os.path.basename(__file__).rstrip(".py")
 
 
 """
-Based on trackagileVer11.py in VTT
-Added action smoothing loss item
+Based on trackagileVer1
+Using new dynamic
 """
 
 
 def get_args():
 	custom_parameters = [
 		{"name": "--task", "type": str, "default": "track_agileVer2", "help": "The name of the task."},
-		{"name": "--experiment_name", "type": str, "default": "track_agileVer1", "help": "Name of the experiment to run or load."},
+		{"name": "--experiment_name", "type": str, "default": "track_agileVer7", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
 		{"name": "--num_envs", "type": int, "default": 64, "help": "Number of environments to create. Batch size will be equal to this"},
@@ -63,9 +62,9 @@ def get_args():
 			"help": "learning rate will decrease every step_size steps"},
 
 		# model setting
-		{"name": "--param_save_name", "type":str, "default": 'track_agileVer1.pth',
+		{"name": "--param_save_name", "type":str, "default": 'track_agileVer7.pth',
 			"help": "The path to model parameters"},
-		{"name": "--param_load_path", "type":str, "default": 'track_agileVer1.pth',
+		{"name": "--param_load_path", "type":str, "default": 'track_agileVer7.pth',
 			"help": "The path to model parameters"},
 		
 		]
@@ -130,7 +129,7 @@ if __name__ == "__main__":
 	torch.manual_seed(args.seed)
 
 	# dynamic = IsaacGymDynamics()
-	dynamic = IsaacGymDynamics()
+	dynamic = IrisDynamics()
 
 	# tmp_model = TrackAgileModuleVer3(device=device).to(device)
 	model = TrackTransferModuleVer0(device=device).to(device)

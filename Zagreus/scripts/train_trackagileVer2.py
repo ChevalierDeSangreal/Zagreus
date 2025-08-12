@@ -136,7 +136,7 @@ if __name__ == "__main__":
 	# tmp_model = TrackAgileModuleVer3(device=device).to(device)
 	model = TrackAgileModuleVer9(device=device).to(device)
 
-	model.load_model(param_load_path)
+	# model.load_model(param_load_path)
 	# tmp_model.load_model(param_load_path)
 	# model.directpred.load_state_dict(tmp_model.directpred.state_dict())
 	# model.extractor_module.load_state_dict(torch.load('/home/wangzimo/VTT/VTT/Zagreus/param_saved/track_agileVer7.pth', map_location=device))
