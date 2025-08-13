@@ -10,6 +10,7 @@ python -m Zagreus.scripts.test_trackagileVer1
 python -m Zagreus.scripts.test_trackagileVer1_onboard
 python -m Zagreus.scripts.test_trackagileVer4_onboard
 python -m Zagreus.scripts.test_trackagileVer6
+python -m Zagreus.scripts.test_trackagileVer6_onboard
 ```
 
 ```

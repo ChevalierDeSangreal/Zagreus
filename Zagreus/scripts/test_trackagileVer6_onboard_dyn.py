@@ -22,7 +22,8 @@ import sys
 
 from Zagreus.config import ROOT_DIR
 from Zagreus.utils import AgileLoss, agile_lossVer7
-from Zagreus.models import TrackAgileModuleVer9
+from Zagreus.utils import enu_to_ned_euler, ned_to_enu_euler, enu_to_ned_xyz, ned_to_enu_xyz
+from Zagreus.models import TrackAgileModuleVer11
 from Zagreus.envs import IrisDynamics, task_registry
 # os.path.basename(__file__).rstrip(".py")
 
@@ -39,7 +40,7 @@ To test train_trackagileVer1.py
 def get_args():
 	custom_parameters = [
 		{"name": "--task", "type": str, "default": "track_agileVer3", "help": "The name of the task."},
-		{"name": "--experiment_name", "type": str, "default": "test_trackagileVer4_onboard", "help": "Name of the experiment to run or load."},
+		{"name": "--experiment_name", "type": str, "default": "test_trackagileVer6_onboard_dyn", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
 		{"name": "--num_envs", "type": int, "default": 2, "help": "Number of environments to create. Batch size will be equal to this"},
@@ -65,9 +66,9 @@ def get_args():
 			"help": "learning rate will decrease every step_size steps"},
 
 		# model setting
-		{"name": "--param_save_name", "type":str, "default": 'track_agileVer4.pth',
+		{"name": "--param_save_name", "type":str, "default": 'track_agileVer6.pth',
 			"help": "The path to model parameters"},
-		{"name": "--param_load_path", "type":str, "default": 'track_agileVer4.pth',
+		{"name": "--param_load_path", "type":str, "default": 'track_agileVer6.pth',
 			"help": "The path to model parameters"},
 		
 		]
@@ -131,7 +132,7 @@ async def run():
 
 	dynamic = IrisDynamics()
 
-	model = TrackAgileModuleVer9(device=device).to(device)
+	model = TrackAgileModuleVer11(device=device).to(device)
 
 	model.load_model(param_load_path)
 	model.eval()
@@ -198,13 +199,18 @@ async def run():
 		
 		async for odometry in drone.telemetry.odometry():
 			# print(odometry)
-			now_quad_state[:, :3] = torch.tensor([odometry.position_body.x_m, odometry.position_body.y_m, -odometry.position_body.z_m], device=device).unsqueeze(0)
-			now_quad_state[:, 6:9] = torch.tensor([odometry.velocity_body.x_m_s, odometry.velocity_body.y_m_s, -odometry.velocity_body.z_m_s], device=device).unsqueeze(0)
+			ned_position = torch.tensor([odometry.position_body.x_m, odometry.position_body.y_m, odometry.position_body.z_m], device=device).unsqueeze(0)
+			now_quad_state[:, :3] = ned_to_enu_xyz(ned_position)
+			ned_velocity = torch.tensor([odometry.velocity_body.x_m_s, odometry.velocity_body.y_m_s, odometry.velocity_body.z_m_s], device=device).unsqueeze(0)
+			now_quad_state[:, 6:9] = ned_to_enu_xyz(ned_velocity)
 			# print(f"z-Body: {odometry.position_body.z_m}, x-Body: {odometry.position_body.x_m}, y-Body: {odometry.position_body.y_m}")
-			now_quad_state[:, 9:] = torch.tensor([odometry.angular_velocity_body.roll_rad_s, odometry.angular_velocity_body.pitch_rad_s, odometry.angular_velocity_body.yaw_rad_s], device=device).unsqueeze(0)
+			ned_angular_velocity = torch.tensor([odometry.angular_velocity_body.roll_rad_s, odometry.angular_velocity_body.pitch_rad_s, odometry.angular_velocity_body.yaw_rad_s], device=device).unsqueeze(0)
+			now_quad_state[:, 9:] = ned_to_enu_euler(ned_angular_velocity)
 			break
+
 		async for attitude in drone.telemetry.attitude_euler():
-			now_quad_state[:, 3:6] = torch.tensor([attitude.roll_deg, attitude.pitch_deg, attitude.yaw_deg], device=device).unsqueeze(0) / 180.0 * np.pi
+			ned_angle = torch.tensor([attitude.roll_deg, attitude.pitch_deg, attitude.yaw_deg], device=device).unsqueeze(0) / 180.0 * np.pi
+			now_quad_state[:, 3:6] = ned_to_enu_euler(ned_angle)
 			break
 		tar_state = now_quad_state.clone().detach()
 		tar_state[:, 0] += 2
@@ -221,53 +227,23 @@ async def run():
 			body_rel_dis = torch.matmul(world_to_body, torch.unsqueeze(rel_dis, 2)).squeeze(-1)
 			body_vel = torch.matmul(world_to_body, torch.unsqueeze(now_quad_state[:, 6:9], 2)).squeeze(-1)
 			
-			if step % 10 == 0:
-
-
-				tmp_input = torch.cat((body_vel, now_quad_state[:, 3:6], body_rel_dis), dim=1)
+			tmp_input = torch.cat((body_vel, now_quad_state[:, 3:6], body_rel_dis), dim=1)
+		
+			tmp_input = tmp_input.unsqueeze(0)
+			input_buffer = input_buffer[1:].clone()
+			input_buffer = torch.cat((input_buffer, tmp_input), dim=0)
 			
-				tmp_input = tmp_input.unsqueeze(0)
-				input_buffer = input_buffer[1:].clone()
-				input_buffer = torch.cat((input_buffer, tmp_input), dim=0)
-				
-				action_seq, embedding = model.decision_module(input_buffer.clone())
-				
-				init_pos = now_quad_state[:, :3].detach()
-				# print("embedding shape:", embedding.shape)
-				predict_res = model.predict_module(embedding)
-
-			idx_predict = step % 10
-			predict_buffer[:, idx_predict, :3] = now_quad_state[:, :3].detach() - init_pos
-			predict_buffer[:, idx_predict, 3:6] = body_vel.detach()
-			predict_buffer[:, idx_predict, 6:9] = now_quad_state[:, 3:6].detach()
-
-			action = action_seq[:, step % 10, :].clone()
+			action = model.decision_module(input_buffer.clone())
 			
-			input_action = torch.zeros((args.batch_size, 4), device=device)
-			input_action[:, 0] = action[:, 0] * 1
-			input_action[:, 1:] = (action[:, 1:] * 2 - 1) * 3 * 180 / np.pi
-			await drone.offboard.set_attitude_rate(AttitudeRate(input_action[0, 1], input_action[0, 2], input_action[0, 3], input_action[0, 0]))
-			await asyncio.sleep(dt)
+			
 			print(f"Step: {step}--------------------------------")
-			print("Action:" , input_action[0, :])
+			print("Action:" , action[0, :])
 			print("Quadrotor state:", now_quad_state[0, :])
 			print("Target state:", tar_state[0, :])
 
-			# # for debug
-			# now_quad_state, acceleration = dynamic(now_quad_state, action, dt)
+			# for debug
+			now_quad_state, acceleration = dynamic(now_quad_state, action, dt)
 
-			
-			# update state of quadrotor
-			async for odometry in drone.telemetry.odometry():
-				# print(odometry)
-				now_quad_state[:, :3] = torch.tensor([odometry.position_body.x_m, odometry.position_body.y_m, -odometry.position_body.z_m], device=device).unsqueeze(0)
-				now_quad_state[:, 6:9] = torch.tensor([odometry.velocity_body.x_m_s, odometry.velocity_body.y_m_s, -odometry.velocity_body.z_m_s], device=device).unsqueeze(0)
-				# print(f"z-Body: {odometry.position_body.z_m}, x-Body: {odometry.position_body.x_m}, y-Body: {odometry.position_body.y_m}")
-				now_quad_state[:, 9:] = torch.tensor([odometry.angular_velocity_body.roll_rad_s, odometry.angular_velocity_body.pitch_rad_s, odometry.angular_velocity_body.yaw_rad_s], device=device).unsqueeze(0)
-				break
-			async for attitude in drone.telemetry.attitude_euler():
-				now_quad_state[:, 3:6] = torch.tensor([attitude.roll_deg, attitude.pitch_deg, attitude.yaw_deg], device=device).unsqueeze(0) / 180.0 * np.pi
-				break
 
 			
 			print(f"Step: {step}, Position: {now_quad_state[0, :3]}, Velocity: {now_quad_state[0, 6:9]}, Orientation: {now_quad_state[0, 3:6]}")
@@ -317,6 +293,12 @@ async def run():
 			writer.add_scalar(f'Orientation/Z', direction_vector[item_tested, 2], step)
 			writer.add_scalar(f'Orientation/Theta', theta_degrees[item_tested], step)
 			writer.add_scalar(f'Orientation/ThetaXY', theta_degrees_hor[item_tested], step)
+			writer.add_scalar(f'Euler Angle/roll', now_quad_state[item_tested, 3], step)
+			writer.add_scalar(f'Euler Angle/pitch', now_quad_state[item_tested, 4], step)
+			writer.add_scalar(f'Euler Angle/yaw', now_quad_state[item_tested, 5], step)
+			writer.add_scalar(f'Angular Velocity/roll', now_quad_state[item_tested, 9], step)
+			writer.add_scalar(f'Angular Velocity/pitch', now_quad_state[item_tested, 10], step)
+			writer.add_scalar(f'Angular Velocity/yaw', now_quad_state[item_tested, 11], step)
 			writer.add_scalar(f'Horizon Distance', horizon_dis, step)
 			writer.add_scalar(f'Position/X', now_quad_state[item_tested, 0], step)
 			writer.add_scalar(f'Position/Y', now_quad_state[item_tested, 1], step)
@@ -324,12 +306,17 @@ async def run():
 			writer.add_scalar(f'Target Position/Y', tar_pos[item_tested, 1], step)
 			writer.add_scalar(f'Velocity/X', now_quad_state[item_tested, 6], step)
 			writer.add_scalar(f'Velocity/Y', now_quad_state[item_tested, 7], step)
+			writer.add_scalar(f'Velocity/Z', now_quad_state[item_tested, 8], step)
 			writer.add_scalar(f'Distance/X', tar_pos[item_tested, 0] - now_quad_state[item_tested, 0], step)
 			writer.add_scalar(f'Distance/Y', tar_pos[item_tested, 1] - now_quad_state[item_tested, 1], step)
 			writer.add_scalar(f'Speed/Z', now_quad_state[item_tested, 8], step)
 			writer.add_scalar(f'Speed', speed, step)
 			writer.add_scalar(f'Height', now_quad_state[item_tested, 2], step)
 
+			writer.add_scalar(f'Action/F', action[item_tested, 0], step)
+			writer.add_scalar(f'Action/roll', action[item_tested, 1], step)
+			writer.add_scalar(f'Action/pitch', action[item_tested, 2], step)
+			writer.add_scalar(f'Action/yaw', action[item_tested, 3], step)
 			
 			timer = timer + 1
 			last_action = action.clone().detach()
