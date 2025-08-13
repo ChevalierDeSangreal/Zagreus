@@ -16,7 +16,7 @@ class MyDynamics:
             modified_params (dict, optional): dynamic mismatch. Defaults to {}.
         """
         with open(
-            os.path.join(Path(__file__).parent.absolute(), "config_quad_isaac_changed.json"),
+            os.path.join(Path(__file__).parent.absolute(), "config_quad_isaac.json"),
             "r"
         ) as infile:
             self.cfg = json.load(infile)

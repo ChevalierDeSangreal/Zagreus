@@ -8,10 +8,13 @@ from isaacgym.torch_utils import *
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions.normal import Normal
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
+from pytorch3d.transforms import euler_angles_to_matrix
+
 
 import pytz
 from datetime import datetime
@@ -21,23 +24,20 @@ from Zagreus.config import ROOT_DIR
 # sys.path.append(ROOT_DIR)
 
 # print(sys.path)
-from Zagreus.envs import *
-from Zagreus.utils import velh_lossVer5, agile_lossVer1, AgileLoss, agile_lossVer4, agile_lossVer6
+from Zagreus.utils import AgileLoss, agile_lossVer6
 from Zagreus.models import TrackTransferModuleVer0
-from Zagreus.envs import IsaacGymDynamics
+from Zagreus.envs import IrisDynamics, task_registry
 # os.path.basename(__file__).rstrip(".py")
 
 
 """
-Based on trackagileVer11.py in VTT
-Added action smoothing loss item
+To test train_trackagileVer1.py
 """
-
 
 def get_args():
 	custom_parameters = [
 		{"name": "--task", "type": str, "default": "track_agileVer2", "help": "The name of the task."},
-		{"name": "--experiment_name", "type": str, "default": "track_agileVer1", "help": "Name of the experiment to run or load."},
+		{"name": "--experiment_name", "type": str, "default": "test_trackagileVer7", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
 		{"name": "--num_envs", "type": int, "default": 64, "help": "Number of environments to create. Batch size will be equal to this"},
@@ -50,7 +50,7 @@ def get_args():
 			"help": "batch size of training. Notice that batch_size should be equal to num_envs"},
 		{"name": "--num_worker", "type":int, "default": 4,
 			"help": "num worker of dataloader"},
-		{"name": "--num_epoch", "type":int, "default": 4096,
+		{"name": "--num_epoch", "type":int, "default": 500,
 			"help": "num of epoch"},
 		{"name": "--len_sample", "type":int, "default": 650,
 			"help": "length of a sample"},
@@ -63,9 +63,9 @@ def get_args():
 			"help": "learning rate will decrease every step_size steps"},
 
 		# model setting
-		{"name": "--param_save_name", "type":str, "default": 'track_agileVer1.pth',
+		{"name": "--param_save_name", "type":str, "default": 'track_agileVer7.pth',
 			"help": "The path to model parameters"},
-		{"name": "--param_load_path", "type":str, "default": 'track_agileVer1.pth',
+		{"name": "--param_load_path", "type":str, "default": 'track_agileVer7.pth',
 			"help": "The path to model parameters"},
 		
 		]
@@ -100,6 +100,7 @@ def get_time():
 
 	return formatted_time_local
 
+
 if __name__ == "__main__":
 	# torch.autograd.set_detect_anomaly(True)
 	args = get_args()
@@ -111,7 +112,7 @@ if __name__ == "__main__":
 	param_save_path = os.path.join(ROOT_DIR, 'param', args.param_save_name)
 	param_load_path = os.path.join(ROOT_DIR, 'param', args.param_load_path)
 	data_path = os.path.join(ROOT_DIR, 'data')
-	log_path = os.path.join(ROOT_DIR, 'runs', run_name)
+	log_path = os.path.join(ROOT_DIR, 'test_runs', run_name)
 
 	writer = SummaryWriter(log_path)
 	writer.add_text(
@@ -130,44 +131,27 @@ if __name__ == "__main__":
 	torch.manual_seed(args.seed)
 
 	# dynamic = IsaacGymDynamics()
-	dynamic = IsaacGymDynamics()
+	dynamic = IrisDynamics()
 
 	# tmp_model = TrackAgileModuleVer3(device=device).to(device)
 	model = TrackTransferModuleVer0(device=device).to(device)
 
-	# model.load_model(param_load_path)
-	# tmp_model.load_model(param_load_path)
-	# model.directpred.load_state_dict(tmp_model.directpred.state_dict())
-	# model.extractor_module.load_state_dict(torch.load('/home/wangzimo/VTT/VTT/Zagreus/param_saved/track_agileVer7.pth', map_location=device))
-
-	for name, param in model.named_parameters():
-		if ("extractor_module" in name) or ("directpred" in name):
-			param.requires_grad = False
-
-
-	# optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-5)
-	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-5)
+	model.load_model(param_load_path)
+	model.eval()
 	criterion = nn.MSELoss(reduction='none')
-	# scheduler = lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
-
+	
 	tar_ori = torch.zeros((args.batch_size, 3)).to(device)
 
 	init_vec = torch.tensor([[1.0, 0.0, 0.0]] * args.batch_size, device=device).unsqueeze(-1)
 
-	
 	embedding_recording_enabled = False
 	all_embeddings = []
 	all_states = []
-	
 
-	for epoch in range(args.num_epoch):
-		
-		print(f"Epoch {epoch} begin...")
-		# embedding_recording_enabled = (epoch > 2000 and epoch <= 2500)
-		embedding_recording_enabled = True
+	with torch.no_grad():
+			
 		old_loss = AgileLoss(args.batch_size, device=device)
 		loss_pred = torch.tensor(0.0)
-		optimizer.zero_grad()
 		
 		timer = torch.zeros((args.batch_size,), device=device)
 
@@ -188,14 +172,25 @@ if __name__ == "__main__":
 		tar_state = envs.get_tar_state().detach()
 		# train
 		for step in range(args.len_sample):
-
+			
+			# # rel_dis = envs.get_relative_distance()
 			rel_dis = tar_state[:, :3] - now_quad_state[:, :3]
+			# rel_dis_3 = rel_dis.repeat(1, 3)
+
+			# # ----------------------------
+			# dep_image = torch.abs(dep_image)
+			# mask = seg_image.bool()
+			# image_input = torch.where(mask, dep_image, torch.full_like(dep_image, 1e2))
+			# image_input = image_input.detach()
+			# image_feature = model.extractor_module(image_input, mask)
+			# # ----------------------------
+
 			world_to_body = dynamic.world_to_body_matrix(now_quad_state[:, 3:6].detach())
 			body_to_world = torch.transpose(world_to_body, 1, 2)
 
 			body_rel_dis = torch.matmul(world_to_body, torch.unsqueeze(rel_dis, 2)).squeeze(-1)
 			body_vel = torch.matmul(world_to_body, torch.unsqueeze(now_quad_state[:, 6:9], 2)).squeeze(-1)
-			body_acc = torch.matmul(world_to_body, torch.unsqueeze(now_quad_state[:, 9:12], 2)).squeeze(-1)
+			body_acc = torch.matmul(world_to_body, torch.unsqueeze(now_quad_state[:, 9:], 2)).squeeze(-1)
 			
 			if step % 10 == 0:
 
@@ -235,110 +230,89 @@ if __name__ == "__main__":
 			# action: [batch_size, 10, 4]
 			action = action_seq[:, step % 10, :].clone()
 			
+			# print("Label:0")
 			new_state_dyn, acceleration = dynamic(now_quad_state, action, envs.cfg.sim.dt)
+			# print("Label:0.25")
 			new_state_sim, tar_state = envs.step(new_state_dyn.detach())
+			# print("Label:0.5")
+			x = envs.save_camera_output(file_name=f'{step}.png', idx=3)
 			tar_pos = tar_state[:, :3].detach()
 			
 			now_quad_state = new_state_dyn
 
+			# print("Label:1")
 			reset_buf, reset_idx = envs.check_reset_out()
+			# if len(reset_idx):
+			#     print(f"On step {step}, reset {reset_idx}")
 			not_reset_buf = torch.logical_not(reset_buf)
 			num_reset += len(reset_idx)
 			input_buffer[:, reset_idx] = 0
 
-			# loss_agile, new_loss = agile_lossVer4(old_loss, now_quad_state, tar_state, 7, tar_ori, 2, timer, envs.cfg.sim.dt, init_vec)
+			# world_to_body = dynamic.world_to_body_matrix(now_quad_state[:, 3:6].detach())
+			# body_to_world = torch.transpose(world_to_body, 1, 2)
+			# world_pred_dis = torch.matmul(body_to_world, torch.unsqueeze(body_pred_dis, 2)).squeeze(-1)
+			# loss, new_loss = agile_lossVer5(old_loss, now_quad_state, tar_state, 7, tar_ori, 3, timer, envs.cfg.sim.dt, init_vec, world_pred_dis)
 			loss_agile, new_loss = agile_lossVer6(old_loss, now_quad_state, tar_state, 7, tar_ori, 2, timer, envs.cfg.sim.dt, init_vec, action, last_action)
 			old_loss = new_loss
+			# print("Label:2")
 			
-			
+			# loss.backward(reset_buf, retain_graph=True)
 			now_quad_state[reset_idx] = envs.reset(reset_buf=reset_buf)[reset_idx].detach()
+			rotation_matrices = euler_angles_to_matrix(now_quad_state[:, 3:6], convention='XYZ')
+			direction_vector = rotation_matrices @ init_vec
+			direction_vector = direction_vector.squeeze()
+
+			cos_sim = F.cosine_similarity(direction_vector, rel_dis, dim=1)
+			theta = torch.acos(cos_sim)
+			theta_degrees = theta * 180.0 / torch.pi
+
+			cos_sim_hor = F.cosine_similarity(direction_vector[:, :2], rel_dis[:, :2], dim=1)
+			theta_hor = torch.acos(cos_sim_hor)
+			theta_degrees_hor = theta_hor * 180.0 / torch.pi
+			
+			item_tested = 3
+			horizon_dis = torch.norm(now_quad_state[item_tested, :2] - tar_pos[item_tested, :2], dim=0, p=4)
+			speed = torch.norm(now_quad_state[item_tested, 6:9], dim=0, p=2)
+
+			if reset_buf[item_tested]:
+				loss_agile[item_tested] = float('nan')
+			writer.add_scalar(f'Total Loss', loss_agile[item_tested], step)
+			writer.add_scalar(f'Direction Loss/sum', old_loss.direction[item_tested], step)
+			writer.add_scalar(f'Direction Loss/xy', old_loss.direction_hor[item_tested], step)
+			writer.add_scalar(f'Direction Loss/z', old_loss.direction_ver[item_tested], step)
+			writer.add_scalar(f'Distance Loss', old_loss.distance[item_tested], step)
+			writer.add_scalar(f'Velocity Loss', old_loss.vel[item_tested], step)
+			writer.add_scalar(f'Orientation Loss', old_loss.ori[item_tested], step)
+			writer.add_scalar(f'Smooth Loss', old_loss.aux[item_tested], step)
+			writer.add_scalar(f'Height Loss', old_loss.h[item_tested], step)
+
+			writer.add_scalar(f'Orientation/X', direction_vector[item_tested, 0], step)
+			writer.add_scalar(f'Orientation/Y', direction_vector[item_tested, 1], step)
+			writer.add_scalar(f'Orientation/Z', direction_vector[item_tested, 2], step)
+			writer.add_scalar(f'Orientation/Theta', theta_degrees[item_tested], step)
+			writer.add_scalar(f'Orientation/ThetaXY', theta_degrees_hor[item_tested], step)
+			writer.add_scalar(f'Acceleration/X', acceleration[item_tested, 0], step)
+			writer.add_scalar(f'Acceleration/Y', acceleration[item_tested, 1], step)
+			writer.add_scalar(f'Acceleration/Z', acceleration[item_tested, 2], step)
+			writer.add_scalar(f'Horizon Distance', horizon_dis, step)
+			writer.add_scalar(f'Position/X', now_quad_state[item_tested, 0], step)
+			writer.add_scalar(f'Position/Y', now_quad_state[item_tested, 1], step)
+			writer.add_scalar(f'Target Position/X', tar_pos[item_tested, 0], step)
+			writer.add_scalar(f'Target Position/Y', tar_pos[item_tested, 1], step)
+			writer.add_scalar(f'Velocity/X', now_quad_state[item_tested, 6], step)
+			writer.add_scalar(f'Velocity/Y', now_quad_state[item_tested, 7], step)
+			writer.add_scalar(f'Distance/X', tar_pos[item_tested, 0] - now_quad_state[item_tested, 0], step)
+			writer.add_scalar(f'Distance/Y', tar_pos[item_tested, 1] - now_quad_state[item_tested, 1], step)
+			writer.add_scalar(f'Action/F', action[item_tested, 0], step)
+			writer.add_scalar(f'Action/X', action[item_tested, 1], step)
+			writer.add_scalar(f'Action/Y', action[item_tested, 2], step)
+			writer.add_scalar(f'Action/Z', action[item_tested, 3], step)
+			writer.add_scalar(f'Speed/Z', now_quad_state[item_tested, 8], step)
+			writer.add_scalar(f'Speed', speed, step)
+			writer.add_scalar(f'Height', now_quad_state[item_tested, 2], step)
+
+			
 			old_loss.reset(reset_idx=reset_idx)
 			timer = timer + 1
 			timer[reset_idx] = 0
 			last_action = action.clone().detach()
-			# print("Length of reset buf:", len(reset_idx), not_reset_buf)
-
-			if (not (step + 1) % 50):
-				
-				# print(action[0])
-				# print("Loss:", loss[0])
-				# print("shape of predict buffer:", predict_buffer.shape)
-				# print("Shape of predict res:", predict_res.shape)
-				# loss_pred = criterion(predict_buffer, predict_res).mean(dim=(1, 2))
-				# print("Loss pred shape:", loss_pred.shape)
-				# print("Loss agile shape:", loss_agile.shape)
-				# print("predict res:", predict_res[0, 9, :])
-				# print("predict buffer:", predict_buffer[0, 9, :])
-				# exit(0)
-				
-				loss = 0.1 * loss_pred + 0.9 * loss_agile
-				loss.backward(not_reset_buf)
-				optimizer.step()
-				optimizer.zero_grad()
-				now_quad_state = now_quad_state.detach()
-				old_loss = AgileLoss(args.batch_size, device=device)
-				input_buffer = input_buffer.detach()
-				timer = timer * 0
-				predict_buffer.zero_().detach_()
-				saved_loss_pred = loss_pred.detach()
-				loss_pred = torch.tensor(0.0)
-				
-
-
-
-		ave_loss_direciton = torch.sum(new_loss.direction) / args.batch_size
-		ave_loss_distance = torch.sum(new_loss.distance) / args.batch_size
-		ave_loss_velocity = torch.sum(new_loss.vel) / args.batch_size
-		ave_loss_ori = torch.sum(new_loss.ori) / args.batch_size
-		ave_loss_h = torch.sum(new_loss.h) / args.batch_size
-		# ave_loss_aux = torch.sum(new_loss.aux) / args.batch_size
-		# ave_loss_intent = torch.sum(loss_intent) / args.batch_size
-		ave_loss_predict = torch.sum(saved_loss_pred) / args.batch_size
-		ave_loss_agile = torch.sum(loss_agile) / args.batch_size
-		ave_loss = torch.sum(loss) / args.batch_size
-		
-		writer.add_scalar('Loss', ave_loss.item(), epoch)
-		writer.add_scalar('Loss Direction', ave_loss_direciton.item(), epoch)
-		writer.add_scalar('Loss Distance', ave_loss_distance.item(), epoch)
-		writer.add_scalar('Loss Velocity', ave_loss_velocity.item(), epoch)
-		# writer.add_scalar('Loss Intent', ave_loss_intent.item(), epoch)
-		writer.add_scalar('Loss Orientation', ave_loss_ori.item(), epoch)
-		writer.add_scalar('Loss Height', ave_loss_h.item(), epoch)
-		# writer.add_scalar('Loss Aux', ave_loss_aux.item(), epoch)
-		writer.add_scalar('Loss Predict', ave_loss_predict.item(), epoch)
-		writer.add_scalar('Loss Agile', ave_loss_agile.item(), epoch)
-		writer.add_scalar('Number Reset', num_reset, epoch)
-			
-
-		print(f"Epoch {epoch}, Ave loss = {ave_loss}, num reset = {num_reset}")
-
-		
-		if epoch == 2000:  
-			for param_group in optimizer.param_groups:
-				param_group['lr'] = 1.6e-5
-		
-		if (epoch + 1) % 500 == 0:
-			print("Saving Model...")
-			model.save_model(param_save_path)
-
-		# if (epoch + 1) % 50 == 0 and len(all_embeddings):
-		# # if  len(all_embeddings):
-		# 	# print(all_embeddings_tensor)
-		# 	all_embeddings_tensor = torch.cat(all_embeddings, dim=0)  # shape: (N, embedding_dim)
-		# 	all_states_tensor = torch.cat(all_states, dim=0)
-		# 	save_path = os.path.join(data_path, f"{epoch}.pt")
-		# 	# save_path = f"/home/core/wangzimo/VTT/VTT/Zagreus/data/{epoch}.pt"
-		# 	print(f"Saving embeddings and states to {save_path}...")
-		# 	torch.save({
-		# 		'embeddings': all_embeddings_tensor,
-		# 		'states':     all_states_tensor
-		# 	}, save_path)
-			
-		# 	# 清空列表，开始下一个周期的收集
-		# 	all_embeddings.clear()
-		# 	all_states.clear()
-
-	
-		# envs.update_target_traj()
-	writer.close()
-	print("Training Complete!")

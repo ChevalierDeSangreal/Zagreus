@@ -25,8 +25,8 @@ from Zagreus.config import ROOT_DIR
 
 # print(sys.path)
 from Zagreus.envs import *
-from Zagreus.utils import velh_lossVer5, agile_lossVer1, AgileLoss, agile_lossVer6
-from Zagreus.models import TrackTransferModuleVer0, TrackAgileModuleVer4
+from Zagreus.utils import AgileLoss, agile_lossVer6
+from Zagreus.models import TrackTransferModuleVer0
 from Zagreus.envs import IsaacGymDynamics, NewtonDynamics, IsaacGymOriDynamics, NRIsaacGymDynamics
 # os.path.basename(__file__).rstrip(".py")
 
@@ -38,7 +38,7 @@ To test train_trackagileVer1.py
 def get_args():
 	custom_parameters = [
 		{"name": "--task", "type": str, "default": "track_agileVer2", "help": "The name of the task."},
-		{"name": "--experiment_name", "type": str, "default": "test_transferVer1", "help": "Name of the experiment to run or load."},
+		{"name": "--experiment_name", "type": str, "default": "test_trackagileVer1", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
 		{"name": "--num_envs", "type": int, "default": 64, "help": "Number of environments to create. Batch size will be equal to this"},
@@ -64,9 +64,9 @@ def get_args():
 			"help": "learning rate will decrease every step_size steps"},
 
 		# model setting
-		{"name": "--param_save_name", "type":str, "default": 'track_agileVer11.pth',
+		{"name": "--param_save_name", "type":str, "default": 'track_agileVer1.pth',
 			"help": "The path to model parameters"},
-		{"name": "--param_load_path", "type":str, "default": 'track_agileVer11.pth',
+		{"name": "--param_load_path", "type":str, "default": 'track_agileVer1.pth',
 			"help": "The path to model parameters"},
 		
 		]
@@ -135,23 +135,29 @@ if __name__ == "__main__":
 	dynamic = IsaacGymDynamics()
 
 	# tmp_model = TrackAgileModuleVer3(device=device).to(device)
-	model = TrackAgileModuleVer4(device=device).to(device)
+	model = TrackTransferModuleVer0(device=device).to(device)
 
 	model.load_model(param_load_path)
 	model.eval()
+	criterion = nn.MSELoss(reduction='none')
 	
 	tar_ori = torch.zeros((args.batch_size, 3)).to(device)
 
 	init_vec = torch.tensor([[1.0, 0.0, 0.0]] * args.batch_size, device=device).unsqueeze(-1)
 
+	embedding_recording_enabled = False
+	all_embeddings = []
+	all_states = []
 
 	with torch.no_grad():
 			
 		old_loss = AgileLoss(args.batch_size, device=device)
+		loss_pred = torch.tensor(0.0)
 		
 		timer = torch.zeros((args.batch_size,), device=device)
 
 		input_buffer = torch.zeros(args.slide_size, args.batch_size, 9+3).to(device)
+		predict_buffer = torch.zeros(args.batch_size, 10, 9).to(device)
 		last_action = None
 
 		reset_buf = None
@@ -186,16 +192,44 @@ if __name__ == "__main__":
 			body_rel_dis = torch.matmul(world_to_body, torch.unsqueeze(rel_dis, 2)).squeeze(-1)
 			body_vel = torch.matmul(world_to_body, torch.unsqueeze(now_quad_state[:, 6:9], 2)).squeeze(-1)
 			body_acc = torch.matmul(world_to_body, torch.unsqueeze(now_quad_state[:, 9:], 2)).squeeze(-1)
-			tmp_input = torch.cat((body_vel, body_acc, now_quad_state[:, 3:6], body_rel_dis), dim=1)
-			# tmp_input_directpred = image_feature
-			# body_pred_dis = model.directpred(tmp_input_directpred)
-
-
-			tmp_input = tmp_input.unsqueeze(0)
-			input_buffer = input_buffer[1:].clone()
-			input_buffer = torch.cat((input_buffer, tmp_input), dim=0)
 			
-			action = model.decision_module(input_buffer.clone())
+			if step % 10 == 0:
+
+
+				tmp_input = torch.cat((body_vel, body_acc, now_quad_state[:, 3:6], body_rel_dis), dim=1)
+			
+				tmp_input = tmp_input.unsqueeze(0)
+				input_buffer = input_buffer[1:].clone()
+				input_buffer = torch.cat((input_buffer, tmp_input), dim=0)
+				
+				action_seq, embedding = model.decision_module(input_buffer.clone())
+				
+				init_pos = now_quad_state[:, :3].detach()
+				# print("embedding shape:", embedding.shape)
+				predict_res = model.predict_module(embedding)
+
+				if embedding_recording_enabled:
+					all_embeddings.append(embedding.detach().cpu())
+					all_states.append(now_quad_state.detach().cpu())
+			
+			idx_predict = step % 10
+			predict_buffer[:, idx_predict, :3] = now_quad_state[:, :3].detach() - init_pos
+			predict_buffer[:, idx_predict, 3:6] = body_vel.detach()
+			predict_buffer[:, idx_predict, 6:9] = now_quad_state[:, 3:6].detach()
+
+			if not (step + 1) % 10:
+
+				# if step:
+				# 	print("Embedding shape:", embedding.shape)
+				# 	print(embedding[0, :])
+				# 	for i in range(10):
+				# 		print(f"predict_buffer[{i}]:", predict_buffer[0, i, :])
+				# 		print(f"predict_res[{i}]:", predict_res[0, i, :])
+				# 	exit(0)
+				loss_pred = loss_pred.clone() + criterion(predict_buffer.clone(), predict_res).mean(dim=(1, 2))
+
+			# action: [batch_size, 10, 4]
+			action = action_seq[:, step % 10, :].clone()
 			
 			# print("Label:0")
 			new_state_dyn, acceleration = dynamic(now_quad_state, action, envs.cfg.sim.dt)
