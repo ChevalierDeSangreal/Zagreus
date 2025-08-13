@@ -576,10 +576,36 @@ class TrackAgileModuleVer11(nn.Module):
         super(TrackAgileModuleVer11, self).__init__()
         self.device = device
 
-        image_feature_size = 64
 
         # Initialize Decision module
         self.decision_module = TrackAgileModuleVer5Dicision(input_size=6+3,device=device).to(device)
+
+        self.predict_module = TrackTransferModuleVer0Predict(device=device).to(device)
+
+    def save_model(self, path):
+        """Save the model's state dictionary to the specified path."""
+        torch.save(self.state_dict(), path)
+
+    def load_model(self, path):
+        """Load the model's state dictionary from the specified path."""
+        self.load_state_dict(torch.load(path, map_location=self.device))
+
+    def set_eval_mode(self):
+        """Set the model to evaluation mode."""
+        self.eval()
+
+class TrackAgileModuleVer12(nn.Module):
+    """
+    Based on ver11
+    Add av input
+    """
+    def __init__(self, device='cpu'):
+        super(TrackAgileModuleVer12, self).__init__()
+        self.device = device
+
+
+        # Initialize Decision module
+        self.decision_module = TrackAgileModuleVer5Dicision(input_size=9+3,device=device).to(device)
 
         self.predict_module = TrackTransferModuleVer0Predict(device=device).to(device)
 
