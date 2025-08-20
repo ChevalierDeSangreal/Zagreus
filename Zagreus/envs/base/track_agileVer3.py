@@ -117,7 +117,7 @@ class TrackAgileVer3(BaseTask):
         # self.traj_generator = TrajectoryGenerator(tar_v, self.cfg.sim.dt, direction_change_interval, total_time=10, batch_size=self.num_envs, device=self.device)
         # self.traj = self.traj_generator.batch_generate_trajectories()
 
-        self.tar_acc_norm = 2
+        self.tar_acc_norm = 1
         self.tar_acc_intervel = 100 # How many time steps will acceleration change once
         self.tar_acc = torch.zeros((self.num_envs, 2), dtype=torch.float, device=self.device)
 
@@ -374,6 +374,8 @@ class TrackAgileVer3(BaseTask):
         self.tar_root_states[env_ids, 3:7] = 0
         self.tar_root_states[env_ids, 6] = 1.0
 
+        # self.tar_acc_norm = torch.rand(num_resets, device=self.device) * 2
+        self.tar_acc_norm = 1
         self.tar_acc[env_ids] = rand_circle_point(num_resets, self.tar_acc_norm, self.device)
         # reset position
         # print(self.count_step.size(), self.tar_traj.size(),env_ids)

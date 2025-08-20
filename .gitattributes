@@ -2,3 +2,7 @@ param_saved/** filter=lfs diff=lfs merge=lfs -text
 runs_saved/** filter=lfs diff=lfs merge=lfs -text
 param/** filter=lfs diff=lfs merge=lfs -text
 data/** filter=lfs diff=lfs merge=lfs -text
+Zagreus/param_saved/** filter=lfs diff=lfs merge=lfs -text
+Zagreus/runs_saved/** filter=lfs diff=lfs merge=lfs -text
+Zagreus/param/** filter=lfs diff=lfs merge=lfs -text
+Zagreus/data/** filter=lfs diff=lfs merge=lfs -text
