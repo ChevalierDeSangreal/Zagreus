@@ -39,7 +39,7 @@ class TrackAgileVer4():
         self.num_envs = self.cfg.env.num_envs
 
         self.device = sim_device
-        self.tar_acc_norm = 1
+        self.tar_acc_norm = 0.5
         self.tar_acc_intervel = 100 # How many time steps will acceleration change once
         self.tar_acc = torch.zeros((self.num_envs, 2), dtype=torch.float, device=self.device)
 

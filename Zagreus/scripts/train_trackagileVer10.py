@@ -23,21 +23,21 @@ from Zagreus.config import ROOT_DIR
 # print(sys.path)
 from Zagreus.utils import AgileLoss, agile_lossVer7
 from Zagreus.models import TrackAgileModuleVer11
-from Zagreus.envs import IrisDynamics, task_registry
+from Zagreus.envs import task_registry
+from Zagreus.envs.base.dynamics_iris_learnable import IrisDynamics
 # os.path.basename(__file__).rstrip(".py")
 
 
 """
-Based on trackagileVer6
-Do not use isaac gym anymore
-Using environment track_agileVer4
+Based on trackagileVer9
+Using learnt dynamics
 """
 
 
 def get_args():
 	custom_parameters = [
 		{"name": "--task", "type": str, "default": "track_agileVer4", "help": "The name of the task."},
-		{"name": "--experiment_name", "type": str, "default": "track_agileVer9", "help": "Name of the experiment to run or load."},
+		{"name": "--experiment_name", "type": str, "default": "track_agileVer10", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
 		{"name": "--num_envs", "type": int, "default": 128, "help": "Number of environments to create. Batch size will be equal to this"},
@@ -63,11 +63,12 @@ def get_args():
 			"help": "learning rate will decrease every step_size steps"},
 
 		# model setting
-		{"name": "--param_save_name", "type":str, "default": 'track_agileVer9.pth',
+		{"name": "--param_save_name", "type":str, "default": 'track_agileVer10.pth',
 			"help": "The path to model parameters"},
-		{"name": "--param_load_path", "type":str, "default": 'track_agileVer9.pth',
+		{"name": "--param_load_path", "type":str, "default": 'track_agileVer10.pth',
 			"help": "The path to model parameters"},
-		
+		{"name": "--dynamic_load_name", "type":str, "default": 'worldVere0.pth',
+			"help": "The path to model parameters"},
 		]
 	# parse arguments
 	args = gymutil.parse_arguments(
@@ -110,6 +111,7 @@ if __name__ == "__main__":
 	
 	param_save_path = os.path.join(ROOT_DIR, 'param', args.param_save_name)
 	param_load_path = os.path.join(ROOT_DIR, 'param', args.param_load_path)
+	dynamic_load_path = os.path.join(ROOT_DIR, 'param', args.dynamic_load_name)
 	data_path = os.path.join(ROOT_DIR, 'data')
 	log_path = os.path.join(ROOT_DIR, 'runs', run_name)
 
@@ -130,7 +132,10 @@ if __name__ == "__main__":
 	torch.manual_seed(args.seed)
 
 	# dynamic = IsaacGymDynamics()
-	dynamic = IrisDynamics()
+	dynamic = IrisDynamics(device=device).to(device)
+	# checkpoint = torch.load(dynamic_load_path, map_location=device)
+	# dynamic.load_state_dict(checkpoint['model_state_dict'])
+	dynamic.eval()
 
 	# tmp_model = TrackAgileModuleVer3(device=device).to(device)
 	model = TrackAgileModuleVer11(device=device).to(device)
@@ -180,6 +185,7 @@ if __name__ == "__main__":
 		
 		num_reset = 0
 		tar_state = envs.get_tar_state().detach()
+		dynamic.reset_action()
 		# train
 		for step in range(args.len_sample):
 
@@ -196,10 +202,13 @@ if __name__ == "__main__":
 			input_buffer = input_buffer[1:].clone()
 			input_buffer = torch.cat((input_buffer, tmp_input), dim=0)
 			
-			action = model.decision_module(input_buffer.clone())
+			action_raw = model.decision_module(input_buffer.clone())
+			action = torch.cat(
+				[action_raw[:, :1], (action_raw[:, 1:] - 0.5) * 6],
+				dim=1
+			)
 			
-			
-			new_state_dyn, acceleration = dynamic(now_quad_state, action, envs.cfg.sim.dt)
+			new_state_dyn, acceleration = dynamic(action, now_quad_state, envs.cfg.sim.dt)
 			new_state_sim, tar_state = envs.step(new_state_dyn.detach())
 			tar_pos = tar_state[:, :3].detach()
 			
@@ -231,6 +240,7 @@ if __name__ == "__main__":
 				old_loss = AgileLoss(args.batch_size, device=device)
 				input_buffer = input_buffer.detach()
 				timer = timer * 0
+				dynamic.detach_action()
 
 
 

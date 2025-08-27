@@ -3,7 +3,7 @@ import torch
 from Zagreus.config import ROOT_DIR
 
 # ------------------- 配置 -------------------
-param_file = "worldVere0.pth"  # 你保存的模型文件
+param_file = "worldVer2.pth"  # 你保存的模型文件
 param_path = os.path.join(ROOT_DIR, "param", param_file)
 
 # ------------------- 加载模型参数 -------------------

@@ -66,7 +66,6 @@ vx, vy, vz = vel_enu[:,0].numpy(), vel_enu[:,1].numpy(), vel_enu[:,2].numpy()
 # 5. 四元数转欧拉角
 # -------------------------------
 quats = np.stack([att_data['q[0]'], att_data['q[1]'], att_data['q[2]'], att_data['q[3]']], axis=1)
-rot = R.from_quat(quats)
 rot_scipy = R.from_quat(np.stack([quats[:,1], quats[:,2], quats[:,3], quats[:,0]], axis=1))
 euler = rot_scipy.as_euler('xyz', degrees=False)  # roll, pitch, yaw
 
@@ -94,7 +93,7 @@ dyaw_cmd = interp_array(t_ctrl, rates_setpoint['yaw'], time_samples)
 thrust = interp_array(t_ctrl, rates_setpoint['thrust_body[2]'], time_samples)
 
 ctrl_cmds_ned = np.stack([droll_cmd, dpitch_cmd, dyaw_cmd], axis=1)
-ctrl_cmds_enu = ned_to_enu_euler(torch.tensor(ctrl_cmds_ned, dtype=torch.float32)).numpy()
+ctrl_cmds_enu = ned_to_enu_xyz(torch.tensor(ctrl_cmds_ned, dtype=torch.float32)).numpy()
 droll_cmd, dpitch_cmd, dyaw_cmd = ctrl_cmds_enu.T  # 拆成时间序列
 
 # 推力 (z轴取反)
