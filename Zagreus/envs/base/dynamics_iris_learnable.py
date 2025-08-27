@@ -3,17 +3,19 @@ import torch
 import os
 import json
 from pathlib import Path
+import torch.nn as nn
 
-class MyDynamics:
+class MyDynamics(nn.Module):
 
-    def __init__(self, modified_params={}):
+    def __init__(self, modified_params={}, device='cpu'):
         """
-        Initialzie quadrotor dynamics
+        Initialize quadrotor dynamics
         Args:
             modified_params (dict, optional): dynamic mismatch. Defaults to {}.
         """
+        super().__init__()
         with open(
-            os.path.join(Path(__file__).parent.absolute(), "config_quad_isaac.json"),
+            os.path.join(Path(__file__).parent.absolute(), "config_quad_iris.json"),
             "r"
         ) as infile:
             self.cfg = json.load(infile)
@@ -21,38 +23,43 @@ class MyDynamics:
         # update with modified parameters
         self.cfg.update(modified_params)
 
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         torch.cuda.set_device(device)
         self.device = device
         
 
         # NUMPY PARAMETERS
         self.mass = self.cfg["mass"]
-        self.kinv_ang_vel_tau = np.array(self.cfg["kinv_ang_vel_tau"])
         self.arm_length = 0.2
-
-        # self.inertia_vector = (
-        #     self.mass / 12.0 * self.arm_length**2 *
-        #     np.array(self.cfg["frame_inertia"])
-        # )
         self.inertia_vector = np.array(self.cfg["inertia"])
-        # print("Inertia Vector:", self.inertia_vector)
-        # TORCH PARAMETERS
-        # torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # self.copter_params = SimpleNamespace(**self.copter_params)
-        self.torch_translational_drag = torch.tensor(
-            self.cfg["translational_drag"]
-        ).float().to(device)
-        self.torch_gravity = torch.tensor(self.cfg["gravity"]).to(device)
-        self.torch_rotational_drag = torch.tensor(self.cfg["rotational_drag"]
-                                                  ).float().to(device)
-        self.torch_inertia_vector = torch.from_numpy(self.inertia_vector
-                                                     ).float().to(device)
 
+        self.torch_gravity = torch.tensor(self.cfg["gravity"]).to(device)
+        self.torch_inertia_vector = torch.from_numpy(self.inertia_vector).float().to(device)
         self.torch_inertia_J = torch.diag(self.torch_inertia_vector).to(device)
         self.torch_inertia_J_inv = torch.diag(1 / self.torch_inertia_vector).to(device)
-        self.torch_kinv_vector = torch.tensor(self.kinv_ang_vel_tau).float().to(device)
-        self.torch_kinv_ang_vel_tau = torch.diag(self.torch_kinv_vector).to(device)
+
+        self.prev_rotate = torch.zeros(3, device=device)
+        self.prev_translate = torch.zeros(1, device=device)
+
+
+        # learnable parameters
+        self.tau_rotate = torch.nn.Parameter(torch.tensor(self.cfg["tau_rotate"], dtype=torch.float32, device=device))
+        self.tau_translate = torch.nn.Parameter(torch.tensor(self.cfg["tau_translate"], dtype=torch.float32, device=device))
+
+        self.kinv_ang_vel_tau = torch.nn.Parameter(
+            torch.tensor(self.cfg["kinv_ang_vel_tau"], dtype=torch.float32, device=device)
+        )
+        self.torch_kinv_ang_vel_tau = torch.diag(self.kinv_ang_vel_tau)
+
+        self.torch_rotational_drag = torch.nn.Parameter(
+            torch.tensor(self.cfg["rotational_drag"], dtype=torch.float32, device=device)
+        )
+
+        self.torch_translational_drag = torch.nn.Parameter(
+            torch.tensor(self.cfg["translational_drag"], dtype=torch.float32, device=device)
+        )
+
+        self.force_weight = torch.nn.Parameter(torch.ones(1, device=device))
+        self.force_bias = torch.nn.Parameter(torch.zeros(1, device=device))
 
 
     @staticmethod
@@ -128,9 +135,30 @@ class MyDynamics:
 
 class IrisDynamics(MyDynamics):
 
-    def __init__(self, modified_params={}):
-        super().__init__(modified_params=modified_params)
-        torch.cuda.set_device(self.device)
+    def __init__(self, modified_params={}, device='cpu'):
+        super().__init__(modified_params=modified_params, device=device)
+        self.device = device
+
+    def apply_rotate_delay(self, rotate, dt):
+        """
+        Apply first-order lag to simulate actuator delay
+        """
+        alpha = dt / (self.tau_rotate + dt)
+        self.prev_rotate = (1 - alpha) * self.prev_rotate + alpha * rotate
+        return self.prev_rotate
+
+    def apply_translate_delay(self, translate, dt):
+        alpha = dt / (self.tau_translate + dt)
+        self.prev_translate = (1 - alpha) * self.prev_translate + alpha * translate
+        return self.prev_translate
+    
+    def reset_action(self):
+        self.prev_rotate = torch.zeros(3, device=self.device)
+        self.prev_translate = torch.zeros(1, device=self.device)
+
+    def detach_action(self):
+        self.prev_rotate = self.prev_rotate.detach()
+        self.prev_translate = self.prev_translate.detach()
 
     def linear_dynamics(self, force, attitude, velocity):
         """
@@ -144,13 +172,11 @@ class IrisDynamics(MyDynamics):
         thrust = 1 / self.mass * torch.matmul(
             body_to_world, torch.unsqueeze(force, 2)
         )
-        # print("thrust", thrust.size())
-        # drag = velocity * TODO: dynamics.drag_coeff??
         drag = - self.torch_translational_drag * velocity
         thrust_min_grav = (
             thrust[:, :, 0] + self.torch_gravity + drag
         )
-        return thrust_min_grav  # - drag
+        return thrust_min_grav
 
     def run_flight_control(self, thrust, av, body_rates, cross_prod):
         """
@@ -183,7 +209,7 @@ class IrisDynamics(MyDynamics):
             print("ERR: batch size larger 1", torch_var.size())
         print(varname, torch_var[0].detach().numpy())
 
-    def __call__(self, state, action, dt):
+    def __call__(self, action, state, dt):
         return self.simulate_quadrotor(action, state, dt)
         
 
@@ -199,11 +225,14 @@ class IrisDynamics(MyDynamics):
 
         # action is normalized between 0 and 1 --> rescale
         # print(action.shape)
-        total_thrust = - action[:, 0] * self.mass * (self.torch_gravity[2]) / 0.71
+        total_thrust = - action[:, 0] * self.mass * (self.torch_gravity[2]) * self.force_weight + self.force_bias
         # print(total_thrust.shape)
         # total_thrust = action[:, 0] * 7.5 + self.mass * (-self.torch_gravity[2])
-        body_rates = (action[:, 1:] * 2 - 1) * 3
+        body_rates = action[:, 1:]
 
+        total_thrust = self.apply_translate_delay(total_thrust, dt)
+        body_rates = self.apply_rotate_delay(body_rates, dt)
+        # print("After delay", action)
         # ctl_dt ist simulation time,
         # remainer wird immer -sim_dt gemacht in jedem loop
         # precompute cross product (batch, 3, 1)

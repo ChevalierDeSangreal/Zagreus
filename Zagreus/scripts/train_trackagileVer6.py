@@ -39,17 +39,17 @@ def get_args():
 		{"name": "--experiment_name", "type": str, "default": "track_agileVer6", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
-		{"name": "--num_envs", "type": int, "default": 32, "help": "Number of environments to create. Batch size will be equal to this"},
+		{"name": "--num_envs", "type": int, "default": 128, "help": "Number of environments to create. Batch size will be equal to this"},
 		{"name": "--seed", "type": int, "default": 42, "help": "Random seed. Overrides config file if provided."},
 
 		# train setting
 		{"name": "--learning_rate", "type":float, "default": 1.6e-4,
 			"help": "the learning rate of the optimizer"},
-		{"name": "--batch_size", "type":int, "default": 32,
+		{"name": "--batch_size", "type":int, "default": 128,
 			"help": "batch size of training. Notice that batch_size should be equal to num_envs"},
 		{"name": "--num_worker", "type":int, "default": 4,
 			"help": "num worker of dataloader"},
-		{"name": "--num_epoch", "type":int, "default": 4096,
+		{"name": "--num_epoch", "type":int, "default": 4090,
 			"help": "num of epoch"},
 		{"name": "--len_sample", "type":int, "default": 650,
 			"help": "length of a sample"},
@@ -62,7 +62,7 @@ def get_args():
 			"help": "learning rate will decrease every step_size steps"},
 
 		# model setting
-		{"name": "--param_save_name", "type":str, "default": 'track_agileVer6.pth',
+		{"name": "--param_save_name", "type":str, "default": 'track_agileVer6_tuned.pth',
 			"help": "The path to model parameters"},
 		{"name": "--param_load_path", "type":str, "default": 'track_agileVer6.pth',
 			"help": "The path to model parameters"},
@@ -134,7 +134,7 @@ if __name__ == "__main__":
 	# tmp_model = TrackAgileModuleVer3(device=device).to(device)
 	model = TrackAgileModuleVer11(device=device).to(device)
 
-	# model.load_model(param_load_path)
+	model.load_model(param_load_path)
 	# tmp_model.load_model(param_load_path)
 	# model.directpred.load_state_dict(tmp_model.directpred.state_dict())
 	# model.extractor_module.load_state_dict(torch.load('/home/wangzimo/VTT/VTT/Zagreus/param_saved/track_agileVer7.pth', map_location=device))
@@ -258,11 +258,11 @@ if __name__ == "__main__":
 		print(f"Epoch {epoch}, Ave loss = {ave_loss}, num reset = {num_reset}")
 
 		
-		if epoch == 2000:  
-			for param_group in optimizer.param_groups:
-				param_group['lr'] = 1.6e-5
+		# if epoch == 80:  
+		# 	for param_group in optimizer.param_groups:
+		# 		param_group['lr'] = 1.6e-5
 		
-		if (epoch + 1) % 1000 == 0:
+		if (epoch + 1) % 5 == 0:
 			print("Saving Model...")
 			model.save_model(param_save_path)
 

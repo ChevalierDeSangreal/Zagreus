@@ -3,17 +3,20 @@ import torch
 import os
 import json
 from pathlib import Path
+import torch.nn as nn
+from .learnable_controller import DroneBodyRateController
 
-class MyDynamics:
+class MyDynamics(nn.Module):
 
-    def __init__(self, modified_params={}):
+    def __init__(self, modified_params={}, device='cpu'):
         """
-        Initialzie quadrotor dynamics
+        Initialize quadrotor dynamics
         Args:
             modified_params (dict, optional): dynamic mismatch. Defaults to {}.
         """
+        super().__init__()
         with open(
-            os.path.join(Path(__file__).parent.absolute(), "config_quad_isaac.json"),
+            os.path.join(Path(__file__).parent.absolute(), "config_quad_iris.json"),
             "r"
         ) as infile:
             self.cfg = json.load(infile)
@@ -21,38 +24,28 @@ class MyDynamics:
         # update with modified parameters
         self.cfg.update(modified_params)
 
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         torch.cuda.set_device(device)
         self.device = device
         
 
         # NUMPY PARAMETERS
         self.mass = self.cfg["mass"]
-        self.kinv_ang_vel_tau = np.array(self.cfg["kinv_ang_vel_tau"])
-        self.arm_length = 0.2
-
-        # self.inertia_vector = (
-        #     self.mass / 12.0 * self.arm_length**2 *
-        #     np.array(self.cfg["frame_inertia"])
-        # )
         self.inertia_vector = np.array(self.cfg["inertia"])
-        # print("Inertia Vector:", self.inertia_vector)
-        # TORCH PARAMETERS
-        # torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # self.copter_params = SimpleNamespace(**self.copter_params)
-        self.torch_translational_drag = torch.tensor(
-            self.cfg["translational_drag"]
-        ).float().to(device)
-        self.torch_gravity = torch.tensor(self.cfg["gravity"]).to(device)
-        self.torch_rotational_drag = torch.tensor(self.cfg["rotational_drag"]
-                                                  ).float().to(device)
-        self.torch_inertia_vector = torch.from_numpy(self.inertia_vector
-                                                     ).float().to(device)
 
+        self.torch_gravity = torch.tensor(self.cfg["gravity"]).to(device)
+        self.torch_inertia_vector = torch.from_numpy(self.inertia_vector).float().to(device)
         self.torch_inertia_J = torch.diag(self.torch_inertia_vector).to(device)
         self.torch_inertia_J_inv = torch.diag(1 / self.torch_inertia_vector).to(device)
-        self.torch_kinv_vector = torch.tensor(self.kinv_ang_vel_tau).float().to(device)
-        self.torch_kinv_ang_vel_tau = torch.diag(self.torch_kinv_vector).to(device)
+
+
+        self.force_weight = torch.nn.Parameter(torch.ones(1, device=device))
+        self.force_bias = torch.nn.Parameter(torch.zeros(1, device=device))
+        self.rotate_weight = torch.nn.Parameter(torch.ones(3, device=device))
+
+        self.torch_translational_drag = torch.nn.Parameter(
+            torch.tensor(self.cfg["translational_drag"], dtype=torch.float32, device=device)
+        )
+
 
 
     @staticmethod
@@ -126,11 +119,15 @@ class MyDynamics:
         # print("output euler rate", together.size())
         return torch.squeeze(together)
 
-class IrisDynamics(MyDynamics):
+class LearnableDynamics(MyDynamics):
 
-    def __init__(self, modified_params={}):
-        super().__init__(modified_params=modified_params)
-        torch.cuda.set_device(self.device)
+    def __init__(self, num_env=1, dt=0.02, device='cpu'):
+        super().__init__(modified_params={}, device=device)
+        self.device = device
+        self.dt = dt
+        self.num_env = num_env
+        self.controller = DroneBodyRateController(num_envs=num_env, dt=dt, device=device).to(device)
+        
 
     def linear_dynamics(self, force, attitude, velocity):
         """
@@ -144,50 +141,34 @@ class IrisDynamics(MyDynamics):
         thrust = 1 / self.mass * torch.matmul(
             body_to_world, torch.unsqueeze(force, 2)
         )
-        # print("thrust", thrust.size())
-        # drag = velocity * TODO: dynamics.drag_coeff??
         drag = - self.torch_translational_drag * velocity
         thrust_min_grav = (
             thrust[:, :, 0] + self.torch_gravity + drag
         )
-        return thrust_min_grav  # - drag
+        return thrust_min_grav
 
-    def run_flight_control(self, thrust, av, body_rates, cross_prod):
+    def run_flight_control(self, action, av):
         """
-        thrust: command first signal (around 9.81)
-        omega = av: current angular velocity
-        command = body_rates: body rates in command
+        action: (num_env, 4) tensor containing [thrust, body_rates], in [-1, 1]
+        av: (num_env, 3) current angular velocity
         """
-        force = torch.unsqueeze(thrust, 1)
-
-        # constants
-        omega_change = torch.unsqueeze(body_rates - av, 2)
-        kinv_times_change = torch.matmul(
-            self.torch_kinv_ang_vel_tau.to(self.device), omega_change.to(self.device)
-        )
-        first_part = torch.matmul(self.torch_inertia_J.to(self.device), kinv_times_change.to(self.device))
-        # print("first_part", first_part.size())
-        rotational_drag_torque = - self.torch_rotational_drag * av
-        body_torque_des = (
-            first_part[:, :, 0] + cross_prod + rotational_drag_torque
-        )
+        force, body_torque_des = self.controller(action, av)
         # print(force.shape, body_torque_des.shape)
         thrust_and_torque = torch.unsqueeze(
             torch.cat((force, body_torque_des), dim=1), 2
         )
         return thrust_and_torque[:, :, 0]
 
-    def _pretty_print(self, varname, torch_var):
-        np.set_printoptions(suppress=1, precision=7)
-        if len(torch_var) > 1:
-            print("ERR: batch size larger 1", torch_var.size())
-        print(varname, torch_var[0].detach().numpy())
+    def __call__(self, action, state):
+        return self.simulate_quadrotor(action, state)
+    
+    def detach_controller(self):
+        self.controller.detach_state()
 
-    def __call__(self, state, action, dt):
-        return self.simulate_quadrotor(action, state, dt)
-        
+    def reset_controller(self):
+        self.controller.reset()
 
-    def simulate_quadrotor(self, action, state, dt):
+    def simulate_quadrotor(self, action, state):
         """
         Pytorch implementation of the dynamics in Flightmare simulator
         """
@@ -197,13 +178,10 @@ class IrisDynamics(MyDynamics):
         velocity = state[:, 6:9]
         angular_velocity = state[:, 9:]
 
-        # action is normalized between 0 and 1 --> rescale
-        # print(action.shape)
-        total_thrust = - action[:, 0] * self.mass * (self.torch_gravity[2]) / 0.71
-        # print(total_thrust.shape)
-        # total_thrust = action[:, 0] * 7.5 + self.mass * (-self.torch_gravity[2])
-        body_rates = (action[:, 1:] * 2 - 1) * 3
-
+        action_scaled = action.clone()
+        action_scaled[:, 0] = (action[:, 0] * 2 - 1) * self.force_weight + self.force_bias
+        action_scaled[:, 1:] = (action[:, 1:] / 4) * self.rotate_weight
+        # print("After delay", action)
         # ctl_dt ist simulation time,
         # remainer wird immer -sim_dt gemacht in jedem loop
         # precompute cross product (batch, 3, 1)
@@ -213,7 +191,7 @@ class IrisDynamics(MyDynamics):
         cross_prod = torch.cross(angular_velocity, inertia_av, dim=1)
 
         force_torques = self.run_flight_control(
-            total_thrust, angular_velocity, body_rates, cross_prod
+            action_scaled, angular_velocity
         ).to(self.device)
 
         # 2) angular acceleration
@@ -222,10 +200,10 @@ class IrisDynamics(MyDynamics):
         angular_acc = torch.matmul(
             torch_inertia_J_inv.to(self.device), torch.unsqueeze((tau - cross_prod).to(self.device), 2)
         )[:, :, 0]
-        new_angular_velocity = angular_velocity + dt * angular_acc
+        new_angular_velocity = angular_velocity + self.dt * angular_acc
 
 
-        attitude = attitude * 0.93 + attitude.detach() * 0.07 + dt * self.euler_rate(attitude, new_angular_velocity)
+        attitude = attitude * 0.93 + attitude.detach() * 0.07 + self.dt * self.euler_rate(attitude, new_angular_velocity)
 
         # 1) linear dynamics
         force_expanded = torch.unsqueeze(force_torques[:, 0], 1)
@@ -237,9 +215,9 @@ class IrisDynamics(MyDynamics):
         acceleration = self.linear_dynamics(force, attitude, velocity)
 
         position = (
-            position * 0.93 + position * 0.07 + 0.5 * dt * dt * acceleration + dt * velocity
+            position * 0.93 + position.detach() * 0.07 + 0.5 * self.dt * self.dt * acceleration + self.dt * velocity
         )
-        velocity = velocity * 0.93 + velocity * 0.07 + dt * acceleration
+        velocity = velocity * 0.93 + velocity.detach() * 0.07 + self.dt * acceleration
 
 
 

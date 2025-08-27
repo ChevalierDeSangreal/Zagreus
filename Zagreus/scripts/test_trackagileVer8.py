@@ -25,7 +25,7 @@ from Zagreus.config import ROOT_DIR
 
 # print(sys.path)
 from Zagreus.utils import AgileLoss, agile_lossVer7
-from Zagreus.models import TrackAgileModuleVer11
+from Zagreus.models import TrackAgileModuleVer12
 from Zagreus.envs import IrisDynamics, task_registry
 # os.path.basename(__file__).rstrip(".py")
 
@@ -37,7 +37,7 @@ To test train_trackagileVer1.py
 def get_args():
 	custom_parameters = [
 		{"name": "--task", "type": str, "default": "track_agileVer3", "help": "The name of the task."},
-		{"name": "--experiment_name", "type": str, "default": "test_agileVer6", "help": "Name of the experiment to run or load."},
+		{"name": "--experiment_name", "type": str, "default": "test_agileVer8", "help": "Name of the experiment to run or load."},
 		{"name": "--headless", "action": "store_true", "help": "Force display off at all times"},
 		{"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
 		{"name": "--num_envs", "type": int, "default": 64, "help": "Number of environments to create. Batch size will be equal to this"},
@@ -63,9 +63,9 @@ def get_args():
 			"help": "learning rate will decrease every step_size steps"},
 
 		# model setting
-		{"name": "--param_save_name", "type":str, "default": 'track_agileVer6.pth',
+		{"name": "--param_save_name", "type":str, "default": 'track_agileVer8.pth',
 			"help": "The path to model parameters"},
-		{"name": "--param_load_path", "type":str, "default": 'track_agileVer9.pth',
+		{"name": "--param_load_path", "type":str, "default": 'track_agileVer8.pth',
 			"help": "The path to model parameters"},
 		
 		]
@@ -134,7 +134,7 @@ if __name__ == "__main__":
 	dynamic = IrisDynamics()
 
 	# tmp_model = TrackAgileModuleVer3(device=device).to(device)
-	model = TrackAgileModuleVer11(device=device).to(device)
+	model = TrackAgileModuleVer12(device=device).to(device)
 
 	model.load_model(param_load_path)
 	model.eval()
@@ -150,7 +150,7 @@ if __name__ == "__main__":
 		
 		timer = torch.zeros((args.batch_size,), device=device)
 
-		input_buffer = torch.zeros(args.slide_size, args.batch_size, 6+3).to(device)
+		input_buffer = torch.zeros(args.slide_size, args.batch_size, 9+3).to(device)
 		last_action = None
 
 		reset_buf = None
@@ -173,8 +173,9 @@ if __name__ == "__main__":
 
 			body_rel_dis = torch.matmul(world_to_body, torch.unsqueeze(rel_dis, 2)).squeeze(-1)
 			body_vel = torch.matmul(world_to_body, torch.unsqueeze(now_quad_state[:, 6:9], 2)).squeeze(-1)
+			body_av = torch.matmul(world_to_body, now_quad_state[:, 9:].unsqueeze(2)).squeeze(-1)
 			
-			tmp_input = torch.cat((body_vel, now_quad_state[:, 3:6], body_rel_dis), dim=1)
+			tmp_input = torch.cat((body_vel, now_quad_state[:, 3:6], body_av, body_rel_dis), dim=1)
 		
 			tmp_input = tmp_input.unsqueeze(0)
 			input_buffer = input_buffer[1:].clone()
