@@ -55,7 +55,7 @@ def get_args():
 			"help": "num worker of dataloader"},
 		{"name": "--num_epoch", "type":int, "default": 500,
 			"help": "num of epoch"},
-		{"name": "--len_sample", "type":int, "default": 150,
+		{"name": "--len_sample", "type":int, "default": 50,
 			"help": "length of a sample"},
 		{"name": "--tmp", "type": bool, "default": False, "help": "Set false to officially save the trainning log"},
 		{"name": "--gamma", "type":int, "default": 0.8,
@@ -188,6 +188,11 @@ async def run():
 		await drone.offboard.set_position_ned(PositionNedYaw(north_m=0, east_m=0, down_m=desired_z, yaw_deg=target_yaw_deg))
 		await asyncio.sleep(0.05)
 
+	print("Preheating Offboard setpoints...")
+	for _ in range(20):  # 20 * 20ms = 0.4s，确保 PX4 认为输入稳定
+		await drone.offboard.set_attitude_rate(AttitudeRate(0, 0.0, 0.0, 0.71))
+		await asyncio.sleep(0.02)  # 50Hz 推送
+
 	mass = 1.9
 	dt = 0.02
 
@@ -251,7 +256,6 @@ async def run():
 		tar_state = now_quad_state.clone().detach()
 		tar_state[:, 0] += 2
 		
-		await asyncio.sleep(3)
 		# train
 		for step in range(args.len_sample):
 			start_action_time = time.perf_counter()
