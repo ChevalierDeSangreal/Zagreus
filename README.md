@@ -66,3 +66,8 @@ dataset = {
 
 - 已从北东地转换为东北天
 - 已通过numpy插值保证相邻时间步长为0.02
+
+```
+python -m Zagreus.dataset.dataset_generaterVer2.py
+
+```
