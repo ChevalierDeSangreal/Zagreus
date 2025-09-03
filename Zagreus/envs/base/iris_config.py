@@ -12,15 +12,15 @@ class MotorConfig:
     taus_down: List[float] = (0.025, 0.025, 0.025, 0.025)
     """Time constants for each motor speed down."""
     
-    init: List[float] = (100.0, 100.0, 100.0, 100.0)
-    """Initial angular velocities for each motor in rad/s."""
+    init: List[float] = (1.62, 1.62, 1.62, 1.62)
+    """Initial angular velocities for each motor in krad/s."""
     
-    max_rotor_acc: List[float] = (50000.0, 50000.0, 50000.0, 50000.0)
-    """Maximum rate of change of angular velocities for each motor in rad/s^2."""
-    
-    min_rotor_acc: List[float] = (-50000.0, -50000.0, -50000.0, -50000.0)
-    """Minimum rate of change of angular velocities for each motor in rad/s^2."""
-    
+    max_rotor_acc: List[float] = (50.0, 50.0, 50.0, 50.0)
+    """Maximum rate of change of angular velocities for each motor in krad/s^2."""
+
+    min_rotor_acc: List[float] = (-50.0, -50.0, -50.0, -50.0)
+    """Minimum rate of change of angular velocities for each motor in krad/s^2."""
+
     use_motor_model: bool = False
     """Flag to determine if motor delay is bypassed."""
 
@@ -28,15 +28,18 @@ class MotorConfig:
 @dataclass
 class BodyRateControllerConfig:
     """Body rate controller configuration parameters"""
-    kp: List[float] = (0.15, 0.15, 0.15)
+    kp: List[float] = (0.15, 0.15, 0.2)
     """Proportional gain for the body rate controller. (x, y, z) axes."""
     
-    ki: List[float] = (0.2, 0.2, 0.2)
+    ki: List[float] = (0.2, 0.2, 0.1)
     """Integral gain for the body rate controller. (x, y, z) axes."""
     
-    kd: List[float] = (0.003, 0.003, 0.003)
+    kd: List[float] = (0.003, 0.003, 0.0)
     """Derivative gain for the body rate controller. (x, y, z) axes."""
-    
+
+    kk: List[float] = (1.0, 1.0, 1.0)
+    """scaling gain for the body rate controller. (x, y, z) axes."""
+
     k_ff: List[float] = (0.0, 0.0, 0.0)
     """Feedforward gain for the controller."""
     
@@ -52,34 +55,41 @@ class ControlAllocatorConfig:
     """Control allocator configuration parameters"""
 
     
-    rotor_pos_com: float = 0.056
+    rotor_pos_com: float = 0.18069
     """Rotor position w.r.t CoM in meters."""
     
-    ctl_thrust_coef: float = 1.0
+    ctl_thrust_coef: float = 6.5
     """Thrust coefficient for the rotor control, thrust = thrust_coeff * u^2."""
     
-    ctl_moment_coef: float = 0.0088
+    ctl_moment_coef: float = 0.050
     """Moment coefficient for the rotor control, moment = moment_coeff * thrust."""
     
-
+@dataclass
+class LinearVelocityEffectConfig:
+    """Linear velocity effect configuration parameters"""
+    rotor_drag_const: float = 2.419284e-5
+    """Rotor drag coefficient."""
+    
+    rolling_moment_const: float = 1e-6
+    """Rolling moment coefficient."""
 
 
 @dataclass
 class IrisDroneConfig:
     """Complete drone configuration"""
-    arm_length: float = 0.25554 * 2
+    arm_length: float = 0.25554
     """Length of the arms of the drone in meters. Diagonal distance between two opposite rotors."""
     
-    drag_coef: float = 2.57532e-9
+    moment_const: float = 2.57532e-3
     """Drag torque coefficient."""
     
-    thrust_coef: float = 2.9265e-7
+    thrust_const: float = 2.9265e-1
     """Thrust coefficient."""
     
-    input_scaling: float = 5400.0
-    """Scaling for 0-1 actuator setpoint to rotor speed in rad/s."""
+    input_scaling: float = 7.2000
+    """Scaling for 0-1 actuator setpoint to rotor speed in krad/s."""
     
-    zero_position_armed: float = 100.0
+    zero_position_armed: float = 0.50
     """Zero position when the drone is armed."""
 
     motor: MotorConfig = MotorConfig()
@@ -90,6 +100,8 @@ class IrisDroneConfig:
     
     control_allocator: ControlAllocatorConfig = ControlAllocatorConfig()
     """Control allocator configuration"""
+
+    linear_velocity_effect: LinearVelocityEffectConfig = LinearVelocityEffectConfig()
 
     quad_x_typical_config: bool = True
     """Flag to determine if the quadrotor is configured in X configuration."""

@@ -24,7 +24,7 @@ from Zagreus.config import ROOT_DIR
 from Zagreus.utils import AgileLoss, agile_lossVer7
 from Zagreus.models import TrackAgileModuleVer11
 from Zagreus.envs import task_registry
-from Zagreus.envs.base.dynamics_iris_learnable import IrisDynamics
+from Zagreus.envs.base.dynamics_learnable import LearnableDynamics
 # os.path.basename(__file__).rstrip(".py")
 
 
@@ -67,7 +67,7 @@ def get_args():
 			"help": "The path to model parameters"},
 		{"name": "--param_load_path", "type":str, "default": 'track_agileVer10.pth',
 			"help": "The path to model parameters"},
-		{"name": "--dynamic_load_name", "type":str, "default": 'worldVere0.pth',
+		{"name": "--dynamic_load_name", "type":str, "default": 'worldVer3.pth',
 			"help": "The path to model parameters"},
 		]
 	# parse arguments
@@ -132,9 +132,9 @@ if __name__ == "__main__":
 	torch.manual_seed(args.seed)
 
 	# dynamic = IsaacGymDynamics()
-	dynamic = IrisDynamics(device=device).to(device)
-	# checkpoint = torch.load(dynamic_load_path, map_location=device)
-	# dynamic.load_state_dict(checkpoint['model_state_dict'])
+	dynamic = LearnableDynamics(num_env=args.batch_size, dt=0.02, device=device).to(device)
+	checkpoint = torch.load(dynamic_load_path, map_location=device)
+	dynamic.load_state_dict(checkpoint['model_state_dict'])
 	dynamic.eval()
 
 	# tmp_model = TrackAgileModuleVer3(device=device).to(device)
@@ -185,7 +185,7 @@ if __name__ == "__main__":
 		
 		num_reset = 0
 		tar_state = envs.get_tar_state().detach()
-		dynamic.reset_action()
+		dynamic.reset_controller()  # 重置
 		# train
 		for step in range(args.len_sample):
 
@@ -208,7 +208,7 @@ if __name__ == "__main__":
 				dim=1
 			)
 			
-			new_state_dyn, acceleration = dynamic(action, now_quad_state, envs.cfg.sim.dt)
+			new_state_dyn, acceleration = dynamic(action, now_quad_state)
 			new_state_sim, tar_state = envs.step(new_state_dyn.detach())
 			tar_pos = tar_state[:, :3].detach()
 			
@@ -240,7 +240,7 @@ if __name__ == "__main__":
 				old_loss = AgileLoss(args.batch_size, device=device)
 				input_buffer = input_buffer.detach()
 				timer = timer * 0
-				dynamic.detach_action()
+				dynamic.detach_controller()
 
 
 

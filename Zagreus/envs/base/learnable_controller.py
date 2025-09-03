@@ -4,7 +4,7 @@ import torch.nn as nn
 from dataclasses import dataclass, field
 from typing import List
 from .iris_config import IrisDroneConfig
-
+from pytorch3d.transforms import euler_angles_to_matrix
 
 def assert_no_nan(tensor, name):
     if tensor is None:
@@ -13,6 +13,72 @@ def assert_no_nan(tensor, name):
         raise RuntimeError(f"NaN detected in {name}, shape={tuple(tensor.shape)}")
     if torch.is_floating_point(tensor) and torch.isinf(tensor).any():
         raise RuntimeError(f"Inf detected in {name}, shape={tuple(tensor.shape)}")
+
+class LinearVelocityEffect(nn.Module):
+    def __init__(self, num_envs, rotor_drag_const, rolling_moment_const, device="cpu", dtype=torch.float32):
+        """
+        Linear velocity effect model for quadrotor, including:
+        - rotor thrust reduction due to velocity along rotor axis (body z-axis)
+        - air drag model
+        - rolling moment model
+        """
+        super().__init__()
+        self.num_envs = num_envs
+        self.device = device
+        self.dtype = dtype
+
+        # 可学习参数（支持反向传播）
+        self.rotor_drag_const = nn.Parameter(torch.tensor(float(rotor_drag_const), device=device, dtype=dtype))
+        self.rolling_moment_const = nn.Parameter(torch.tensor(float(rolling_moment_const), device=device, dtype=dtype))
+
+        # 固定参数（不需要学习）
+        self._max_velocity_parallel_z = nn.Parameter(torch.tensor(25.0, device=device, dtype=dtype), requires_grad=False)
+
+        # rotor_dir: (num_envs, num_motors)
+        self.rotor_dir = torch.tensor([1, -1, 1, -1], device=device, dtype=dtype)
+
+    def forward(self, linear_velocity_w, attitude_euler, omega, wind_velocity_w, static_rotor_thrust):
+        """
+        Compute the air drag, rolling moment based on the rotor angular velocities, and the drone orientation.
+
+        Args:
+        - linear_velocity_w: (num_envs, 3), linear velocity of the drone in world frame
+        - attitude_euler: (num_envs, 3), euler angles (roll, pitch, yaw) under the world frame
+        - omega: (num_envs, num_motors), actual rotor angular velocities
+        - wind_velocity_w: (num_envs, 3), wind velocity in world frame
+        - static_rotor_thrust: (num_envs, num_motors), static rotor thrust forces
+
+        Returns:
+        - dynamic_rotor_thrust: (num_envs, num_motors)
+        - air_drag_force_each_rotor: (num_envs, num_motors, 3)
+        - rolling_moment: (num_envs, 3)
+        """
+        # 1. body frame z-axis in world frame
+        rotmat_w = euler_angles_to_matrix(attitude_euler, convention="XYZ")  # (num_envs, 3, 3)
+        z_b_w = rotmat_w[:, :, 2]  # (num_envs, 3)
+
+        # 2. relative wind velocity
+        relative_wind_velocity_w = linear_velocity_w - wind_velocity_w  # (num_envs, 3)
+        v_parallel_z = (relative_wind_velocity_w * z_b_w).sum(dim=-1, keepdim=True) * z_b_w  # (num_envs, 3)
+        v_perpendicular_z = relative_wind_velocity_w - v_parallel_z  # (num_envs, 3)
+
+        # 3. thrust reduction
+        scaling_factor = 1 - torch.norm(v_parallel_z, dim=-1, keepdim=True) / self._max_velocity_parallel_z
+        dynamic_rotor_thrust = static_rotor_thrust * scaling_factor.clamp(min=0.0)
+
+        # 4. air drag force
+        air_drag_force_each_rotor = (
+            - torch.abs(omega) * self.rotor_drag_const
+        )[:, :, None] * v_perpendicular_z[:, None, :]
+
+        # 5. rolling moment
+        rolling_moment = torch.sum(
+            - torch.abs(omega) * self.rotor_dir * self.rolling_moment_const, dim=1
+        ).unsqueeze(-1) * v_perpendicular_z  # (num_envs, 3)
+
+        return dynamic_rotor_thrust, air_drag_force_each_rotor, rolling_moment
+
+
 
 
 class ButterworthFilter(nn.Module):
@@ -112,7 +178,7 @@ class ButterworthFilter(nn.Module):
         self._y2 = self._y2.detach()
 
 class Allocation(nn.Module):
-    def __init__(self, num_envs, quad_x_typical_config, arm_length, thrust_coeff, drag_coeff, device="cpu", dtype=torch.float32):
+    def __init__(self, num_envs, quad_x_typical_config, arm_length, thrust_const, moment_const, device="cpu", dtype=torch.float32):
         """
         Initializes the allocation matrix for a quadrotor for multiple environments.
         Control allocator computes the normalized PWM and thrust from the normalized wrench.
@@ -122,8 +188,8 @@ class Allocation(nn.Module):
         - num_envs (int): Number of environments
         - quad_x_typical_config (bool): If True, uses the quad X configuration; otherwise, uses the quad + configuration
         - arm_length (float): Distance from the center to the rotor
-        - thrust_coeff (float): Rotor thrust constant
-        - drag_coeff (float): Rotor torque constant
+        - thrust_const (float): Rotor thrust constant
+        - moment_const (float): Rotor torque constant
         - device (str): 'cpu' or 'cuda'
         - dtype (torch.dtype): Desired tensor dtype
         """
@@ -133,9 +199,9 @@ class Allocation(nn.Module):
         self.device = device
         self.dtype = dtype
 
-        self.arm_length = nn.Parameter(torch.tensor(float(arm_length), device=device, dtype=dtype))
-        self.thrust_coeff = nn.Parameter(torch.tensor(float(thrust_coeff), device=device, dtype=dtype))
-        self.drag_coeff = nn.Parameter(torch.tensor(float(drag_coeff), device=device, dtype=dtype))
+        self.arm_length = nn.Parameter(torch.tensor(float(arm_length), device=device, dtype=dtype), requires_grad=False)
+        self.thrust_const = nn.Parameter(torch.tensor(float(thrust_const), device=device, dtype=dtype))
+        self.moment_const = nn.Parameter(torch.tensor(float(moment_const), device=device, dtype=dtype))
 
 
     def _compute_allocation_matrix(self):
@@ -146,32 +212,34 @@ class Allocation(nn.Module):
                 torch.ones(4, dtype=self.dtype, device=self.device),
                 torch.tensor([1, -1, -1, 1], dtype=self.dtype, device=self.device) * self.arm_length * sqrt2_inv,
                 torch.tensor([-1, -1, 1, 1], dtype=self.dtype, device=self.device) * self.arm_length * sqrt2_inv,
-                torch.tensor([1, -1, 1, -1], dtype=self.dtype, device=self.device) * self.drag_coeff
+                torch.tensor([1, -1, 1, -1], dtype=self.dtype, device=self.device) * self.moment_const
             ])
         else:
             A = torch.stack([
                 torch.ones(4, dtype=self.dtype, device=self.device),
                 torch.tensor([1, -1, -1, 1], dtype=self.dtype, device=self.device) * self.arm_length * sqrt2_inv,
                 torch.tensor([1, 1, -1, -1], dtype=self.dtype, device=self.device) * self.arm_length * sqrt2_inv,
-                torch.tensor([1, -1, -1, 1], dtype=self.dtype, device=self.device) * self.drag_coeff
+                torch.tensor([1, -1, -1, 1], dtype=self.dtype, device=self.device) * self.moment_const
             ])
 
         return A.unsqueeze(0).repeat(self.num_envs, 1, 1)
 
-    def forward(self, omega: torch.Tensor):
+    def forward(self, dynamic_rotor_thrust: torch.Tensor):
         """
         Compute total thrust and body torques from rotor angular velocities.
 
         Args:
-            omega (torch.Tensor): Shape (num_envs, 4), rotor angular velocities.
+            dynamic_rotor_thrust (torch.Tensor): Shape (num_envs, 4), rotor angular velocities. in krad/s
 
         Returns:
             thrust_torque (torch.Tensor): Shape (num_envs, 4), [total thrust, tau_x, tau_y, tau_z]
         """
         allocation_matrix = self._compute_allocation_matrix()
-        # print("Value of omega", omega)
-        thrusts_ref = self.thrust_coeff * omega**2
-        thrust_torque = torch.bmm(allocation_matrix, thrusts_ref.unsqueeze(-1)).squeeze(-1)
+        # print("thrust_const in Allocation", self.thrust_const.item())
+        # print(allocation_matrix[0])
+        # thrusts_ref = self.thrust_const * dynamic_rotor_thrust**2
+        # thrust_torque = torch.bmm(allocation_matrix, thrusts_ref.unsqueeze(-1)).squeeze(-1)
+        thrust_torque = torch.bmm(allocation_matrix, dynamic_rotor_thrust.unsqueeze(-1)).squeeze(-1)
         return thrust_torque
 
 class Motor(nn.Module):
@@ -189,9 +257,9 @@ class Motor(nn.Module):
         - num_envs: Number of envs.
         - taus_up: (4,) Tensor or list specifying time constants per motor.
         - taus_down: (4,) Tensor or list specifying time constants per motor.
-        - init: (4,) Tensor or list specifying the initial omega per motor. (rad/s)
-        - max_rotor_acc: (4,) Tensor or list specifying max rate of change of omega per motor. (rad/s^2)
-        - min_rotor_acc: (4,) Tensor or list specifying min rate of change of omega per motor. (rad/s^2)
+        - init: (4,) Tensor or list specifying the initial omega per motor. (krad/s)
+        - max_rotor_acc: (4,) Tensor or list specifying max rate of change of omega per motor. (krad/s^2)
+        - min_rotor_acc: (4,) Tensor or list specifying min rate of change of omega per motor. (krad/s^2)
         - dt: Time step for integration.
         - use: Boolean indicating whether to use motor dynamics.
         - device: 'cpu' or 'cuda' for tensor operations.
@@ -219,10 +287,10 @@ class Motor(nn.Module):
         Computes the new omega values based on reference omega and motor dynamics.
 
         Parameters:
-        - omega_ref: (num_envs, num_motors) Tensor of reference omega values.
+        - omega_ref (Tensor): Tensor of reference omega values. shape (num_envs, num_motors)
 
         Returns:
-        - omega: (num_envs, num_motors) Tensor of updated omega values.
+        - omega_ref (Tensor): Tensor of reference omega values. shape (num_envs, num_motors)
         """
 
         if not self.use:
@@ -235,6 +303,8 @@ class Motor(nn.Module):
             self.taus_up.expand_as(self.omega),
             self.taus_down.expand_as(self.omega),
         )
+        # print("omega in Motor:", self.omega[0])
+        # print("omega_ref:", omega_ref[0])
 
         # Rate of change
         omega_rate = (1.0 / tau) * (omega_ref - self.omega)
@@ -259,6 +329,37 @@ def get_control_allocator(allocation):
     assert_no_nan(allocation, "allocation")
     return torch.linalg.pinv(allocation)
 
+def normalize_control_allocator(ctl_allocator):
+    """ 
+    Normalize the control allocator matrix. for stable inner loop control, this follows
+    the PX4 logic src/modules/control_allocator/ControlAllocation/ControlAllocationPseudoInverse.cpp
+    """
+    num_non_zero_roll_torque = 4
+    num_non_zero_pitch_torque = 4
+    num_non_zero_thrust = 4
+    
+    # scale for thrust
+    thrust_norm_scale = torch.sum(ctl_allocator[:,0])/num_non_zero_thrust
+    
+    # scale for roll and pitch torque
+    roll_norm_scale = torch.sqrt(torch.sum(ctl_allocator[:,1]**2)/(num_non_zero_roll_torque/2))
+    pitch_norm_scale = torch.sqrt(torch.sum(ctl_allocator[:,2]**2)/(num_non_zero_pitch_torque/2))
+    
+    # yaw scale is the larget element absolute value in the fourth column
+    yaw_norm_scale = torch.max(torch.abs(ctl_allocator[:,3]))
+    
+    rp_scale = max(roll_norm_scale, pitch_norm_scale)
+    # Create new normalized allocator instead of modifying in-place
+    normalized_allocator = torch.stack([
+        ctl_allocator[:,0] / thrust_norm_scale,
+        ctl_allocator[:,1] / rp_scale,
+        ctl_allocator[:,2] / rp_scale,
+        ctl_allocator[:,3] / yaw_norm_scale
+    ], dim=1)
+    
+    return normalized_allocator
+
+
 @torch.jit.script
 def compute_control_allocation(ctl_allocators, norm_thrust, norm_torque):
     """Compute the control allocation based on the normalized thrust and torque.
@@ -272,8 +373,8 @@ def compute_control_allocation(ctl_allocators, norm_thrust, norm_torque):
     # print("norm_thrust:", norm_thrust[0])
     # print("norm_torque:", norm_torque[0])
     wrench_vec = torch.cat([norm_thrust, norm_torque], dim=1).unsqueeze(-1)  # (num_envs, 4, 1)
-    u_square_vec = torch.bmm(ctl_allocators, wrench_vec).squeeze(-1) # (num_envs, 4)
-    return torch.sqrt(torch.clamp(u_square_vec, min=1e-6, max=1.0)) # (num_envs, 4)
+    u_vec = torch.bmm(ctl_allocators, wrench_vec).squeeze(-1) # (num_envs, 4)
+    return torch.clamp(u_vec, min=0.0, max=1.0) # (num_envs, 4)
 
 class ControlAllocator(nn.Module):
     def __init__(self, num_envs, rotor_pos_com, ctl_thrust_coef, ctl_moment_coef, device="cpu", dtype=torch.float32):
@@ -289,7 +390,7 @@ class ControlAllocator(nn.Module):
             num_envs (int): Number of environments.
             rotor_pos_com(float): The position of the rotors in xy axes w.r.t the CoM.
                            This value may not be the true geometry value, due to the PX4 wrong configuration.
-            ctl_thrust_coef (float): Thrust coefficient for the rotor control, thrust = thrust_coeff * u^2.
+            ctl_thrust_coef (float): Thrust coefficient for the rotor control, thrust = thrust_const * u^2.
             ctl_moment_coef (float): Moment coefficient for the rotor control, moment = moment_coeff * thrust.
                            This value may not be the true geometry value, due to the PX4 wrong configuration.
             device (str): Device to run the computations on.
@@ -307,9 +408,9 @@ class ControlAllocator(nn.Module):
         self.dtype = dtype
         
 
-        self.rotor_pos_com = nn.Parameter(torch.tensor(float(rotor_pos_com), dtype=dtype, device=device))
-        self.ctl_thrust_coef = nn.Parameter(torch.tensor(float(ctl_thrust_coef), dtype=dtype, device=device))
-        self.ctl_moment_coef = nn.Parameter(torch.tensor(float(ctl_moment_coef), dtype=dtype, device=device))
+        self.rotor_pos_com = nn.Parameter(torch.tensor(float(rotor_pos_com), dtype=dtype, device=device), requires_grad=False)
+        self.ctl_thrust_coef = nn.Parameter(torch.tensor(float(ctl_thrust_coef), dtype=dtype, device=device), requires_grad=False)
+        self.ctl_moment_coef = nn.Parameter(torch.tensor(float(ctl_moment_coef), dtype=dtype, device=device), requires_grad=False)
         
     def forward(self, norm_thrust: torch.Tensor, norm_torque: torch.Tensor) -> torch.Tensor:
 
@@ -330,6 +431,7 @@ class ControlAllocator(nn.Module):
         # print("cond(eff_matrix) =", cond_num)
         assert_no_nan(eff_matrix, "eff_matrix")
         ctl_allocator = get_control_allocator(eff_matrix)
+        ctl_allocator = normalize_control_allocator(ctl_allocator)
         # print("ctl_allocator:", ctl_allocator)
         ctl_allocators = ctl_allocator.unsqueeze(0).repeat(self.num_envs, 1, 1)  # (num_envs, 4, 4)
 
@@ -339,7 +441,7 @@ class ControlAllocator(nn.Module):
 
 class BodyRateController(nn.Module):
      
-    def __init__(self, num_envs, dt, kp, ki, kd, k_ff, cutoff_hz, device="cpu", dtype=torch.float32):
+    def __init__(self, num_envs, dt, kp, ki, kd, kk, k_ff, cutoff_hz, device="cpu", dtype=torch.float32):
         """ Body rate PID controller for quadcopters.
         A batch parallel implementation of the PX4 body rate controller.
         
@@ -349,6 +451,7 @@ class BodyRateController(nn.Module):
         - kp (torch.Tensor): Proportional gain for the controller.
         - ki (torch.Tensor): Integral gain for the controller.
         - kd (torch.Tensor): Derivative gain for the controller.
+        - kk (torch.Tensor): Scaling gain for the controller.
         - k_ff (torch.Tensor): Feedforward gain for the controller.
         - cutoff_hz list(float): Butterworth Low-pass filter cutoff frequency [Hz] \
                                 for the rate and rate derivate term.
@@ -361,10 +464,11 @@ class BodyRateController(nn.Module):
         self.dtype = dtype
         
         # 可学习参数
-        self.kp = nn.Parameter(torch.tensor(kp, device=device, dtype=dtype))
-        self.ki = nn.Parameter(torch.tensor(ki, device=device, dtype=dtype))
-        self.kd = nn.Parameter(torch.tensor(kd, device=device, dtype=dtype))
-        self.k_ff = nn.Parameter(torch.tensor(k_ff, device=device, dtype=dtype))
+        self.kp = nn.Parameter(torch.tensor(kp, device=device, dtype=dtype), requires_grad=False)
+        self.ki = nn.Parameter(torch.tensor(ki, device=device, dtype=dtype), requires_grad=False)
+        self.kd = nn.Parameter(torch.tensor(kd, device=device, dtype=dtype), requires_grad=False)
+        self.kk = nn.Parameter(torch.tensor(kk, device=device, dtype=dtype), requires_grad=False)
+        self.k_ff = nn.Parameter(torch.tensor(k_ff, device=device, dtype=dtype), requires_grad=False)
 
         self._integral = torch.zeros(num_envs, 3, device=device, dtype=dtype)
         self._prev_rate = torch.zeros(num_envs, 3, device=device, dtype=dtype)
@@ -390,7 +494,7 @@ class BodyRateController(nn.Module):
             device = device,
             dtype = dtype
         )
-        
+        self.all_rates = []
         """Initialize the integral and previous error terms."""
         
         
@@ -420,9 +524,11 @@ class BodyRateController(nn.Module):
         assert_no_nan(rate, "rate")
         # 1. Compute the rate derivative
         d_rate = (rate - self._prev_rate) / self.dt
-        # print("d_rate in PID", d_rate[0])
-        # print("rate in PID:", rate[0])
+        # print("d_rate in PID", torch.max(d_rate))
+        # print("rate in PID:", torch.max(rate))
         # 2. Apply low-pass filter to the rate and the rate derivative
+        self.all_rates.append(rate)
+        torch.save(torch.stack(self.all_rates, dim=0), "/home/core/wangzimo/Zagreus/Zagreus/data/all_rates.pt")
         rate_filtered = self.rate_filter(rate) 
         d_rate_filtered = self.rate_derivate_filter(d_rate)  
         # rate_filtered = rate.clone()
@@ -446,10 +552,12 @@ class BodyRateController(nn.Module):
         # print("kd in PID:", self.kd)
         # 4. PID with the feedforward term
         torque = (
-            self.kp * error + 
-            self.ki * self._integral + 
-            self.kd * d_rate_filtered + 
-            self.k_ff * rate_ref
+                self.kk * (
+                self.kp * error  
+                + self.ki * self._integral  
+                - self.kd * d_rate_filtered 
+                + self.k_ff * rate_ref
+            )
         )
         # print("torque in PID:", torque[0])
         # 5. Update with original (unfiltered) rate
@@ -526,7 +634,7 @@ class DroneBodyRateController(nn.Module):
 
 
         self.zero_position_armed = nn.Parameter(torch.tensor(float(self.config.zero_position_armed), device=device, dtype=dtype))
-        self.input_scaling = nn.Parameter(torch.tensor(float(self.config.input_scaling), device=device, dtype=dtype))
+        self.input_scaling = nn.Parameter(torch.tensor(float(self.config.input_scaling), device=device, dtype=dtype), requires_grad=False)
 
         # Motor module
         self._motor = Motor(
@@ -545,8 +653,8 @@ class DroneBodyRateController(nn.Module):
             num_envs=self.num_envs,
             quad_x_typical_config=self.config.quad_x_typical_config,
             arm_length=self.config.arm_length,
-            thrust_coeff=self.config.thrust_coef,
-            drag_coeff=self.config.drag_coef,
+            thrust_const=self.config.thrust_const,
+            moment_const=self.config.moment_const,
             device=self.device,
             dtype=dtype,
         )
@@ -557,6 +665,7 @@ class DroneBodyRateController(nn.Module):
             kp=self.config.body_rate_controller.kp,
             ki=self.config.body_rate_controller.ki,
             kd=self.config.body_rate_controller.kd,
+            kk=self.config.body_rate_controller.kk,
             k_ff=self.config.body_rate_controller.k_ff,
             cutoff_hz=self.config.body_rate_controller.cutoff_hz,
             device=device,
@@ -573,13 +682,23 @@ class DroneBodyRateController(nn.Module):
             dtype=dtype,
         )
 
-    def forward(self, actions: torch.Tensor, current_rate: torch.Tensor):
+        self.linear_vel_effect = LinearVelocityEffect(
+            num_envs=self.num_envs,
+            rotor_drag_const=self.config.linear_velocity_effect.rotor_drag_const,
+            rolling_moment_const=self.config.linear_velocity_effect.rolling_moment_const,
+            device=device,
+            dtype=dtype,
+        )
+
+    def forward(self, actions: torch.Tensor, current_rate: torch.Tensor, current_vel: torch.Tensor, current_attitude: torch.Tensor):
         """
         Compute the force/torque vector from normalized thrust and body rate commands.
 
         Args:
             actions (torch.Tensor): (num_envs, 4), normalized thrust + body rate [-1, 1]
             current_rate (torch.Tensor): (num_envs, 3), current body rates
+            current_vel (torch.Tensor): (num_envs, 3), current linear velocities
+            current_attitude (torch.Tensor): (num_envs, 3), current attitudes (eular)
 
         Returns:
             thrust (torch.Tensor): (num_envs, 1)
@@ -597,6 +716,7 @@ class DroneBodyRateController(nn.Module):
         assert_no_nan(z_thrust, "z_thrust")
         assert_no_nan(body_rate_scaled, "body_rate_scaled")
         assert_no_nan(current_rate, "current_rate")
+        # print("z_thrust before PID:", z_thrust[0])
 
         # 2. PID controller computes normalized torque
         norm_torque, _ = self._body_rate_controller.forward(
@@ -604,26 +724,43 @@ class DroneBodyRateController(nn.Module):
             rate=current_rate,
             debug=False,
         )
+        # print("norm_torque after PID:", norm_torque[0])
         # print("norm_torque after body rate pid:", norm_torque[0])
         # 3. Control allocation: normalized actuator command
         actuator_sp = self._ctl_allocator(
             norm_thrust=z_thrust,
             norm_torque=norm_torque,
-        )
+        ) #(num_envs, 4), in [0, 1] range
 
         # 4. Map actuator_sp to rotor speed reference
-        omega_ref = self.zero_position_armed + actuator_sp * self.input_scaling
+        omega_ref = self.zero_position_armed + actuator_sp * self.input_scaling # (num_envs, 4)
 
         # 5. Motor computes actual rotor speeds
-        omega_real = self._motor(omega_ref)
+        omega_real = self._motor(omega_ref) # (num_envs, 4)
+        # print("omega_real after Motor:", omega_real[0])
 
-        # 6. Allocation computes final thrust/torque
-        force_torque = self._allocation(omega_real)
+        # 6. compute the dynamics rotor thrust and the air drag on each rotor
+        dynamic_rotor_thrust, air_drag_force_each_rotor, rolling_moment = self.linear_vel_effect(
+            linear_velocity_w=current_vel,
+            attitude_euler=current_attitude,
+            omega=omega_real,
+            wind_velocity_w=torch.zeros((self.num_envs, 3), device=self.device, dtype=self.dtype),
+            static_rotor_thrust=self.config.thrust_const * omega_real**2
+        )
+        air_drag_force_rigid_body = air_drag_force_each_rotor.sum(dim=1)  # (num_envs, 3)
+        
+        # 7. Allocation computes final thrust/torque
+        force_torque = self._allocation(dynamic_rotor_thrust)
 
         # Split into thrust and torque
-        thrust = force_torque[:, 0:1]
-        torque = force_torque[:, 1:4]
+        # print("Shape of air_drag_force_rigid_body:", air_drag_force_rigid_body.shape)
+        # print("Shape of rolling_moment", rolling_moment.shape)
+        z_axis = torch.tensor([0, 0, 1], device=self.device, dtype=self.dtype).unsqueeze(0)
+        thrust = force_torque[:, 0:1] * z_axis + air_drag_force_rigid_body # (num_envs, 3)
+        torque = force_torque[:, 1:4] + rolling_moment # (num_envs, 3)
 
+        
+        
         return thrust, torque
 
     def reset(self):

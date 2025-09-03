@@ -7,6 +7,7 @@ python -m Zagreus.scripts.train_trackagileVer2
 python -m Zagreus.scripts.train_trackagileVer3
 
 python -m Zagreus.scripts.train_dynamics
+python -m Zagreus.scripts.test_dynamics
 
 python -m Zagreus.scripts.test_trackagileVer1
 python -m Zagreus.scripts.test_trackagileVer1_onboard

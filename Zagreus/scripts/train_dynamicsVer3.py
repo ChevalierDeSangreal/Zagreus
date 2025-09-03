@@ -12,7 +12,7 @@ from datetime import datetime
 import argparse
 # 导入自定义模块
 from Zagreus.envs.base.dynamics_learnable import LearnableDynamics
-from Zagreus.dataset import TrajDataset
+from Zagreus.dataset import TrajDatasetVer2
 from Zagreus.config import ROOT_DIR
 
 import torch
@@ -21,8 +21,8 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 """
-Based on train_dynamics.py
-Training Sun's controller
+Based on train_dynamicsVer2.py
+Training on datasetVer2
 """
 
 
@@ -38,7 +38,7 @@ def get_args():
     parser = argparse.ArgumentParser(description="Trajectory Training Args")
 
     # ------------------- 基本任务参数 -------------------
-    parser.add_argument("--experiment_name", type=str, default="train_dynamicsVer2", help="Name of the experiment")
+    parser.add_argument("--experiment_name", type=str, default="train_dynamicsVer3", help="Name of the experiment")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     # ------------------- 环境 & 设备 -------------------
@@ -46,17 +46,16 @@ def get_args():
     parser.add_argument("--compute_device_id", type=int, default=0, help="CUDA device id")
 
     # ------------------- 训练超参数 -------------------
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--batch_size", type=int, default=128, help="Batch size for DataLoader")
-    parser.add_argument("--num_epoch", type=int, default=500, help="Number of epochs")
-    parser.add_argument("--train_len", type=int, default=5, help="Sequence length for trajectory dataset")
-    parser.add_argument("--prepare_len", type=int, default=80, help="Sequence length for trajectory dataset")
-    parser.add_argument("--save_interval", type=int, default=10, help="Save model every N epochs")
+    parser.add_argument("--learning_rate", type=float, default=1e-2, help="Learning rate")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size for DataLoader")
+    parser.add_argument("--num_epoch", type=int, default=10000, help="Number of epochs")
+    parser.add_argument("--train_len", type=int, default=50, help="Sequence length for trajectory dataset")
+    parser.add_argument("--save_interval", type=int, default=100, help="Save model every N epochs")
 
     # ------------------- 数据路径 -------------------
-    parser.add_argument("--data_name", type=str, default="ulog_dataset.json", help="Trajectory dataset JSON file")
-    parser.add_argument("--param_save_name", type=str, default="worldVer2.pth", help="Path to save model")
-    parser.add_argument("--param_load_path", type=str, default="worldVer2.pth", help="Path to load pre-trained model")
+    parser.add_argument("--data_name", type=str, default="ulog_datasetVer2.json", help="Trajectory dataset JSON file")
+    parser.add_argument("--param_save_name", type=str, default="worldVer3.pth", help="Path to save model")
+    parser.add_argument("--param_load_path", type=str, default="worldVer3.pth", help="Path to load pre-trained model")
 
     # ------------------- 其他 -------------------
     parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for DataLoader")
@@ -91,7 +90,7 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    torch.autograd.set_detect_anomaly(True)
+    # torch.autograd.set_detect_anomaly(True)
 
     device = args.sim_device
     print("Using device:", device)
@@ -100,14 +99,14 @@ if __name__ == "__main__":
     # Dynamics
     dynamics = LearnableDynamics(num_env=args.batch_size, dt=0.02, device=device).to(device)
     # checkpoint = torch.load(param_load_path, map_location=device)
-    # dynamics.load_state_dict(checkpoint['model_state_dict'])
+    # dynamics.load_state_dict(checkpoint['model_state_dict'], strict=False)
 
     # Dataset & Dataloader
-    dataset = TrajDataset(data_path, seq_len=args.train_len+args.prepare_len, device=device)
+    dataset = TrajDatasetVer2(data_path, seq_len=args.train_len, device=device)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
 
     # Optimizer & Loss
-    optimizer = optim.Adam(dynamics.parameters(), lr=args.learning_rate, eps=1e-5)
+    optimizer = optim.Adam(dynamics.parameters(), lr=args.learning_rate, eps=1e-8)
     criterion = nn.MSELoss()
 
     # 训练循环
@@ -123,19 +122,15 @@ if __name__ == "__main__":
             
             dynamics.reset_controller()  # 重置
 
-            assert args.prepare_len > 1, "prepare_len must be greater than 1"
-            for step in range(1, args.prepare_len):
-                # print(f"Step: {step}")
-                now_state, _ = dynamics(action_seq[:, step - 1], state_seq[:, step - 1])
 
             
-            now_state = state_seq[:, args.prepare_len-1].clone()
-            for step in range(args.prepare_len, args.train_len + args.prepare_len):
+            now_state = state_seq[:, 0].clone()
+            for step in range(1, args.train_len):
                 # print(f"Step: {step}")
                 # print("Shape of action", action_seq[:, step - 1].shape)
                 # print("State", now_state[0])
                 # print("Action", action_seq[0, step - 1])
-                now_state, _ = dynamics(action_seq[:, step - 1], now_state)
+                now_state = dynamics(action_seq[:, step - 1], now_state)
                 loss = loss + criterion(now_state, state_seq[:, step])
 
             # now_state, _ = dynamics(action_seq[:, 0], state_seq[:, 0])
@@ -152,7 +147,7 @@ if __name__ == "__main__":
             total_loss += loss.item()
         print("------------Value of Param------------")
         for name, param in dynamics.named_parameters():
-            print(f"{name}: param max={param.data.max().item():.4f}, min={param.data.min().item():.4f}, norm={param.data.norm().item():.4f}")
+            print(f"{name}: param max={param.data.max().item():.8f}, min={param.data.min().item():.8f}, norm={param.data.norm().item():.8f}")
         
             # exit(0)
 
@@ -170,6 +165,6 @@ if __name__ == "__main__":
                 'loss': avg_loss
             }
             torch.save(save_dict, param_save_path)
-
+        # exit(0)
     writer.close()
     print("Training complete!")

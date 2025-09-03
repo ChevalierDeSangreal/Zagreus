@@ -121,13 +121,13 @@ class MyDynamics(nn.Module):
 
 class LearnableDynamics(MyDynamics):
 
-    def __init__(self, num_env=1, dt=0.02, device='cpu'):
+    def __init__(self, num_env=1, dt=0.02, controller_dt=1e-3, device='cpu'):
         super().__init__(modified_params={}, device=device)
         self.device = device
-        self.dt = dt
+        self.dt = controller_dt # Simulator will be num_control_per_step times, each simulate takes controller_dt s
         self.num_env = num_env
-        self.controller = DroneBodyRateController(num_envs=num_env, dt=dt, device=device).to(device)
-        
+        self.num_control_per_step = dt / controller_dt
+        self.controller = DroneBodyRateController(num_envs=num_env, dt=controller_dt, device=device).to(device)
 
     def linear_dynamics(self, force, attitude, velocity):
         """
@@ -147,12 +147,12 @@ class LearnableDynamics(MyDynamics):
         )
         return thrust_min_grav
 
-    def run_flight_control(self, action, av):
+    def run_flight_control(self, action, av, current_vel, current_attitude):
         """
         action: (num_env, 4) tensor containing [thrust, body_rates], in [-1, 1]
         av: (num_env, 3) current angular velocity
         """
-        force, body_torque_des = self.controller(action, av)
+        force, body_torque_des = self.controller(action, av, current_vel, current_attitude)
         # print(force.shape, body_torque_des.shape)
         thrust_and_torque = torch.unsqueeze(
             torch.cat((force, body_torque_des), dim=1), 2
@@ -160,8 +160,10 @@ class LearnableDynamics(MyDynamics):
         return thrust_and_torque[:, :, 0]
 
     def __call__(self, action, state):
-        return self.simulate_quadrotor(action, state)
-    
+        for _ in range(int(self.num_control_per_step)):
+            state, _ = self.simulate_quadrotor(action, state)
+        return state
+
     def detach_controller(self):
         self.controller.detach_state()
 
@@ -191,11 +193,10 @@ class LearnableDynamics(MyDynamics):
         cross_prod = torch.cross(angular_velocity, inertia_av, dim=1)
 
         force_torques = self.run_flight_control(
-            action_scaled, angular_velocity
+            action_scaled, angular_velocity, velocity, attitude
         ).to(self.device)
-
         # 2) angular acceleration
-        tau = force_torques[:, 1:]
+        tau = force_torques[:, 3:]
         torch_inertia_J_inv = torch.inverse(self.torch_inertia_J.to(self.device))
         angular_acc = torch.matmul(
             torch_inertia_J_inv.to(self.device), torch.unsqueeze((tau - cross_prod).to(self.device), 2)
@@ -206,12 +207,11 @@ class LearnableDynamics(MyDynamics):
         attitude = attitude * 0.93 + attitude.detach() * 0.07 + self.dt * self.euler_rate(attitude, new_angular_velocity)
 
         # 1) linear dynamics
-        force_expanded = torch.unsqueeze(force_torques[:, 0], 1)
-        f_s = force_expanded.size()
-        force = torch.cat(
-            (torch.zeros(f_s).to(self.device), torch.zeros(f_s).to(self.device), force_expanded), dim=1
-        )
+        force = force_torques[:, :3]  # (num_envs, 3)
 
+        # print("Force:", force[0])
+        # print("Attitude:", attitude[0])
+        # print("Velocity:", velocity[0])
         acceleration = self.linear_dynamics(force, attitude, velocity)
 
         position = (
